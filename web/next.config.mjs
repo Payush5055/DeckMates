@@ -1,0 +1,8 @@
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  reactStrictMode: true,
+  // Engine & shared are TS-source workspace packages; let Next transpile them.
+  transpilePackages: ['@cardadda/engine', '@cardadda/shared'],
+};
+
+export default nextConfig;

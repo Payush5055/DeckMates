@@ -1,0 +1,17 @@
+{
+  "name": "cardadda",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CardAdda — web-based multiplayer card games platform (v1: Callbreak).",
+  "workspaces": [
+    "packages/*",
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "dev:server": "npm run dev --workspace @cardadda/server",
+    "dev:web": "npm run dev --workspace @cardadda/web"
+  }
+}

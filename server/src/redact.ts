@@ -1,0 +1,74 @@
+/**
+ * Redaction: turn authoritative room state into the shapes that go over the
+ * wire. This is the single chokepoint enforcing the brief's critical rule —
+ * a client must NEVER receive another player's hand.
+ *
+ *   • `buildPublicRoomState` exposes per-player card COUNTS only.
+ *   • `buildSelfState` returns exactly one player's own hand.
+ *
+ * The server sends each socket `{ room: <public>, self: <their own> }`.
+ */
+
+import { TOTAL_ROUNDS, legalPlays } from '@cardadda/engine';
+import type {
+  PublicPlayer,
+  PublicRoomState,
+  SelfState,
+} from '@cardadda/shared';
+import { Room, RoomPlayer } from './room';
+
+/** Public table state — safe to send to everyone. Carries no hands. */
+export function buildPublicRoomState(room: Room): PublicRoomState {
+  const game = room.game;
+  const players: PublicPlayer[] = [...room.players]
+    .sort((a, b) => a.seat - b.seat)
+    .map((p) => ({
+      seat: p.seat,
+      name: p.name,
+      avatar: p.avatar,
+      connected: p.connected,
+      isHost: p.playerId === room.hostPlayerId,
+      // Count only — the actual cards are deliberately not included.
+      cardCount: game ? game.hands[p.seat]!.length : 0,
+      bid: game ? game.bids[p.seat]! : null,
+      tricksWon: game ? game.tricksWon[p.seat]! : 0,
+    }));
+
+  const onClock = game && (game.phase === 'bidding' || game.phase === 'playing');
+
+  return {
+    roomCode: room.code,
+    phase: room.phase,
+    players,
+    seatsFilled: room.players.length,
+    roundNumber: game?.roundNumber ?? 0,
+    totalRounds: TOTAL_ROUNDS,
+    dealer: game?.dealer ?? null,
+    leadSeat: game?.leadSeat ?? null,
+    turn: onClock ? game!.turn : null,
+    // Cards already played into the trick are face-up on the table → public.
+    currentTrick: game ? game.currentTrick.map((t) => ({ seat: t.seat, card: t.card })) : [],
+    scores: game ? game.scores.slice() : [0, 0, 0, 0],
+    hostPlayerId: room.hostPlayerId,
+  };
+}
+
+/** The private slice for one recipient — the only payload that holds cards. */
+export function buildSelfState(room: Room, player: RoomPlayer): SelfState {
+  const game = room.game;
+  const hand = game ? game.hands[player.seat]!.slice() : [];
+
+  // Offer legal moves only when it is genuinely this player's turn to play.
+  let legal: SelfState['legalPlays'] = [];
+  if (game && game.phase === 'playing' && game.turn === player.seat) {
+    const leadSuit = game.currentTrick.length > 0 ? game.currentTrick[0]!.card.suit : null;
+    legal = legalPlays(hand, leadSuit);
+  }
+
+  return {
+    playerId: player.playerId,
+    seat: player.seat,
+    hand,
+    legalPlays: legal,
+  };
+}
