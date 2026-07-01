@@ -24,8 +24,7 @@ class Peer {
   latest: RoomStateUpdate | null = null;
   constructor(
     readonly socket: ClientSocket,
-    readonly playerId: string,
-    readonly name: string,
+    readonly username: string,
   ) {
     socket.on(ServerEvents.RoomStateUpdate, (u: RoomStateUpdate) => {
       this.latest = u;
@@ -41,15 +40,25 @@ class Peer {
 
 const peers: Peer[] = [];
 
-function connect(playerId: string, name: string): Promise<Peer> {
-  const socket = ioClient(`http://localhost:${port}`, { transports: ['websocket'], forceNew: true });
-  const peer = new Peer(socket, playerId, name);
+/** Connect with a dev-auth handshake token (server runs with DEV_AUTH=1). */
+function connect(username: string): Promise<Peer> {
+  const socket = ioClient(`http://localhost:${port}`, {
+    transports: ['websocket'],
+    forceNew: true,
+    auth: { token: `dev:${username}` },
+  });
+  const peer = new Peer(socket, username);
   peers.push(peer);
   return new Promise<Peer>((resolve) => socket.on('connect', () => resolve(peer)));
 }
 
 function emitAck<T>(socket: ClientSocket, event: string, payload: unknown): Promise<T> {
   return new Promise<T>((resolve) => socket.emit(event, payload, resolve));
+}
+
+/** create_room takes no payload — just an ack callback. */
+function createRoom(socket: ClientSocket): Promise<CreateRoomRes> {
+  return new Promise<CreateRoomRes>((resolve) => socket.emit(ClientEvents.CreateRoom, resolve));
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs = 3000): Promise<void> {
@@ -75,26 +84,15 @@ afterEach(async () => {
 
 /** Create the room with the first peer and join the rest; return all four. */
 async function seatFourPlayers(): Promise<{ code: string; all: Peer[] }> {
-  const a = await connect('p-a', 'Ann');
-  const created = await emitAck<CreateRoomRes>(a.socket, ClientEvents.CreateRoom, {
-    playerId: a.playerId,
-    name: a.name,
-  });
+  const a = await connect('Ann');
+  const created = await createRoom(a.socket);
   expect(created.ok).toBe(true);
   const code = created.roomCode!;
 
   const rest: Peer[] = [];
-  for (const [pid, name] of [
-    ['p-b', 'Bob'],
-    ['p-c', 'Cy'],
-    ['p-d', 'Dee'],
-  ] as const) {
-    const peer = await connect(pid, name);
-    const res = await emitAck<JoinRoomRes>(peer.socket, ClientEvents.JoinRoom, {
-      roomCode: code,
-      playerId: pid,
-      name,
-    });
+  for (const name of ['Bob', 'Cy', 'Dee']) {
+    const peer = await connect(name);
+    const res = await emitAck<JoinRoomRes>(peer.socket, ClientEvents.JoinRoom, { roomCode: code });
     expect(res.ok).toBe(true);
     rest.push(peer);
   }
@@ -114,23 +112,25 @@ async function completeBidding(all: Peer[]): Promise<void> {
 
 describe('GameServer end-to-end', () => {
   it('generates a readable 6-char room code', async () => {
-    const a = await connect('p-a', 'Ann');
-    const created = await emitAck<CreateRoomRes>(a.socket, ClientEvents.CreateRoom, {
-      playerId: a.playerId,
-      name: a.name,
-    });
+    const a = await connect('Ann');
+    const created = await createRoom(a.socket);
     expect(created.roomCode).toMatch(/^[A-Z0-9]{6}$/);
   });
 
   it('rejects joining a non-existent room', async () => {
-    const s = await connect('x', 'X');
-    const res = await emitAck<JoinRoomRes>(s.socket, ClientEvents.JoinRoom, {
-      roomCode: 'ZZZZZZ',
-      playerId: 'x',
-      name: 'X',
-    });
+    const s = await connect('X');
+    const res = await emitAck<JoinRoomRes>(s.socket, ClientEvents.JoinRoom, { roomCode: 'ZZZZZZ' });
     expect(res.ok).toBe(false);
     expect(res.error).toMatch(/not found/i);
+  });
+
+  it('rejects a socket with no auth token', async () => {
+    const socket = ioClient(`http://localhost:${port}`, { transports: ['websocket'], forceNew: true });
+    const err = await new Promise<string>((resolve) => {
+      socket.on('connect_error', (e) => resolve(e.message));
+    });
+    socket.close();
+    expect(err).toMatch(/token|unauthor/i);
   });
 
   it('auto-starts and deals 13 cards to each of four players', async () => {
@@ -205,13 +205,9 @@ describe('GameServer end-to-end', () => {
     expect(observer.latest!.room.players).toHaveLength(4);
     expect(observer.latest!.room.seatsFilled).toBe(4);
 
-    // Reconnecting with the same player id reclaims the seat.
-    const rejoin = await connect(victim.playerId, victim.name);
-    const res = await emitAck<JoinRoomRes>(rejoin.socket, ClientEvents.JoinRoom, {
-      roomCode: code,
-      playerId: victim.playerId,
-      name: victim.name,
-    });
+    // Reconnecting as the same user (same dev token) reclaims the seat.
+    const rejoin = await connect(victim.username);
+    const res = await emitAck<JoinRoomRes>(rejoin.socket, ClientEvents.JoinRoom, { roomCode: code });
     expect(res.ok).toBe(true);
     expect(res.seat).toBe(victimSeat);
     await waitFor(

@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { DM_Sans, IBM_Plex_Mono, Playfair_Display } from 'next/font/google';
 import './globals.css';
+import { AuthProvider } from '@/lib/authContext';
 import { TableProvider } from '@/lib/socketContext';
 
 // Characterful serif for headings.
@@ -34,7 +35,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className={`${serif.variable} ${sans.variable} ${mono.variable}`}>
       <body className="min-h-screen bg-felt text-ink">
-        <TableProvider>{children}</TableProvider>
+        <AuthProvider>
+          <TableProvider>{children}</TableProvider>
+        </AuthProvider>
       </body>
     </html>
   );

@@ -1,27 +1,36 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { getPlayerId } from '@/lib/playerId';
+import { useAuth } from '@/lib/authContext';
 import { formatTenths, ordinal } from '@/lib/format';
 import { SuitDivider } from '@/components/ui/SuitDivider';
 import type { MatchRecord } from '@cardadda/shared';
 
 const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL ?? 'http://localhost:4000';
 
-/** Past completed matches for this browser's player id. Names are fine here. */
+/** Past completed matches for the signed-in user. Names are fine to show here. */
 export default function HistoryPage() {
+  const { ready, user, needsUsername, token } = useAuth();
+  const router = useRouter();
   const [matches, setMatches] = useState<MatchRecord[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // History requires being signed in.
   useEffect(() => {
-    const playerId = getPlayerId();
-    if (!playerId) return;
-    fetch(`${SOCKET_URL}/api/history?playerId=${encodeURIComponent(playerId)}`)
+    if (ready && (!user || needsUsername)) {
+      router.replace(`/login?next=${encodeURIComponent('/history')}`);
+    }
+  }, [ready, user, needsUsername, router]);
+
+  useEffect(() => {
+    if (!ready || !user || needsUsername || !token) return;
+    fetch(`${SOCKET_URL}/api/history`, { headers: { Authorization: `Bearer ${token}` } })
       .then((r) => r.json())
-      .then((data: { matches: MatchRecord[] }) => setMatches(data.matches ?? []))
+      .then((data: { matches?: MatchRecord[] }) => setMatches(data.matches ?? []))
       .catch(() => setError('Could not reach the game server.'));
-  }, []);
+  }, [ready, user, needsUsername, token]);
 
   return (
     <main className="mx-auto max-w-3xl px-4 pb-16">

@@ -13,6 +13,7 @@
   "dependencies": {
     "@cardadda/engine": "*",
     "@cardadda/shared": "*",
+    "@supabase/supabase-js": "^2.45.4",
     "framer-motion": "^11.5.4",
     "next": "14.2.15",
     "react": "^18.3.1",

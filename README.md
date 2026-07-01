@@ -29,16 +29,19 @@ npm run dev:server
 npm run dev:web
 ```
 
-Open http://localhost:3000. To play a full 4-seat game on one machine, open the
-table link in four browser tabs/windows (each gets its own persistent player id).
+Open http://localhost:3000. **Accounts are required** — you'll be sent to
+`/login`. With the dev bypass enabled (`DEV_AUTH=1` / `NEXT_PUBLIC_DEV_AUTH=1`,
+the default in the example env), sign in as a "test user" by picking any
+username. To play a full 4-seat game on one machine, open four browser tabs and
+sign in with a different username in each.
 
 Config: copy `server/.env.example` → `server/.env` and `web/.env.local.example`
-→ `web/.env.local` if you need non-default ports or Supabase.
+→ `web/.env.local`. For real Google sign-in, follow **[SETUP_AUTH.md](SETUP_AUTH.md)**.
 
 ## Test & typecheck
 
 ```bash
-npm test        # 47 tests (41 engine + 6 server integration)
+npm test        # 48 tests (41 engine + 7 server integration)
 npm run typecheck
 ```
 
@@ -54,15 +57,23 @@ See `packages/engine/README.md` for engine details and `server/README.md` for th
 socket contract and the privacy guarantee (no client ever receives another
 player's hand).
 
-## Supabase (optional, for history)
+## Auth & Supabase
 
-History works out of the box via an in-memory store (resets on server restart).
-To persist: set `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` in `server/.env` and
-apply `server/supabase/schema.sql`. No code change needed.
+Sign-in is **Google OAuth via Supabase Auth**; on first sign-in you pick a
+unique username (DB-`UNIQUE`-enforced). The Socket.io server verifies the
+Supabase access token on every connection and derives identity server-side — a
+client can never claim another user (`server/src/auth.ts`). Full setup
+(Google Cloud + Supabase provider + SQL) is in **[SETUP_AUTH.md](SETUP_AUTH.md)**.
+
+Until that's configured, the **dev bypass** lets you run everything locally.
+Match history keys off the authenticated user id and persists to Supabase when
+configured (in-memory otherwise; resets on restart) — apply
+`server/supabase/schema.sql` (creates both the `profiles` and `matches` tables).
 
 ## Extension points (intentionally left clean for later)
 
 - **More games:** the browse grid already renders grayed "Coming soon" cards; the
   pure engine pattern in `packages/engine` is meant to be duplicated per game.
-- **Accounts/auth:** identity is a browser-persisted player id today; swap for
-  real auth without touching the rule engine.
+- **Auth backends:** identity flows through `AuthProvider` (web) and
+  `verifyToken` (server); add providers or replace the dev bypass without
+  touching the rule engine or game logic.

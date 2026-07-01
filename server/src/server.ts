@@ -12,6 +12,7 @@ import { Server as SocketServer } from 'socket.io';
 import { config } from './config';
 import { GameServer } from './gameServer';
 import { createHistoryStore, type MatchHistoryStore } from './persistence';
+import { verifyToken } from './auth';
 import { log } from './logger';
 
 export interface BuiltServer {
@@ -33,6 +34,20 @@ export async function buildServer(): Promise<BuiltServer> {
     cors: { origin: config.corsOrigin, methods: ['GET', 'POST'] },
   });
 
+  // Authenticate every socket at the handshake: derive a verified identity from
+  // the token and stash it on socket.data. Unauthenticated sockets are rejected.
+  io.use(async (socket, next) => {
+    try {
+      const token = socket.handshake.auth?.token as string | undefined;
+      const identity = await verifyToken(token);
+      socket.data.userId = identity.userId;
+      socket.data.username = identity.username;
+      next();
+    } catch (err) {
+      next(new Error(err instanceof Error ? err.message : 'Unauthorized'));
+    }
+  });
+
   const game = new GameServer(io, store);
   io.on('connection', (socket) => game.register(socket));
 
@@ -41,16 +56,21 @@ export async function buildServer(): Promise<BuiltServer> {
     res.json({ ok: true, uptime: process.uptime() });
   });
 
-  // Match history for the /history tab, keyed by the browser player id.
+  // Match history for the signed-in user. The identity comes from the verified
+  // bearer token (Authorization header) — never a client-supplied id.
   app.get('/api/history', async (req, res) => {
-    const playerId = String(req.query.playerId ?? '').trim();
-    if (!playerId) {
-      res.status(400).json({ error: 'playerId is required' });
+    const auth = req.header('authorization') ?? '';
+    const token = auth.toLowerCase().startsWith('bearer ') ? auth.slice(7).trim() : '';
+    let userId: string;
+    try {
+      ({ userId } = await verifyToken(token));
+    } catch {
+      res.status(401).json({ error: 'Unauthorized' });
       return;
     }
     const limit = Math.min(Number(req.query.limit ?? 25) || 25, 100);
     try {
-      const matches = await game.listMatches(playerId, limit);
+      const matches = await game.listMatches(userId, limit);
       res.json({ matches });
     } catch (err) {
       log.error('History query failed', err);

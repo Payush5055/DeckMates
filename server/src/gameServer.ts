@@ -22,7 +22,6 @@ import {
 import {
   ClientEvents,
   ServerEvents,
-  type CreateRoomReq,
   type CreateRoomRes,
   type FinalStanding,
   type GameOverPayload,
@@ -36,16 +35,21 @@ import {
 } from '@cardadda/shared';
 import { config } from './config';
 import { generateUniqueRoomCode } from './codes';
-import { avatarForSeat, sanitizeName } from './avatars';
+import { avatarForSeat } from './avatars';
 import { buildPublicRoomState, buildSelfState } from './redact';
 import { Room, RoomPlayer } from './room';
 import { MatchHistoryStore } from './persistence';
 import { log } from './logger';
 
-/** Extra fields we stash on each socket to route later events / disconnects. */
+/**
+ * Fields on each socket. `userId`/`username` are set by the auth middleware
+ * (server/src/server.ts) from the verified handshake token — never from the
+ * client payload. `roomCode` is set when the socket joins/creates a room.
+ */
 interface SocketData {
+  userId?: string;
+  username?: string;
   roomCode?: string;
-  playerId?: string;
 }
 
 type Ack<T> = ((res: T) => void) | undefined;
@@ -60,8 +64,8 @@ export class GameServer {
 
   /** Attach handlers for a freshly connected socket. */
   register(socket: Socket): void {
-    socket.on(ClientEvents.CreateRoom, (req: CreateRoomReq, ack: Ack<CreateRoomRes>) =>
-      this.guard(() => this.onCreateRoom(socket, req, ack), () => ack?.({ ok: false, error: 'Server error' })),
+    socket.on(ClientEvents.CreateRoom, (ack: Ack<CreateRoomRes>) =>
+      this.guard(() => this.onCreateRoom(socket, ack), () => ack?.({ ok: false, error: 'Server error' })),
     );
     socket.on(ClientEvents.JoinRoom, (req: JoinRoomReq, ack: Ack<JoinRoomRes>) =>
       this.guard(() => this.onJoinRoom(socket, req, ack), () => ack?.({ ok: false, error: 'Server error' })),
@@ -94,41 +98,43 @@ export class GameServer {
 
   /* ── Handlers ───────────────────────────────────────────────────────────── */
 
-  private onCreateRoom(socket: Socket, req: CreateRoomReq, ack: Ack<CreateRoomRes>): void {
-    const playerId = String(req?.playerId ?? '').trim();
-    if (!playerId) return ack?.({ ok: false, error: 'Missing player id' });
+  private onCreateRoom(socket: Socket, ack: Ack<CreateRoomRes>): void {
+    const identity = this.identityOf(socket);
+    if (!identity) return ack?.({ ok: false, error: 'Not authenticated' });
+    const { userId, username } = identity;
 
     const code = generateUniqueRoomCode((c) => this.rooms.has(c));
-    const room = new Room(code, playerId);
+    const room = new Room(code, userId);
     this.rooms.set(code, room);
 
     const seat: Seat = 0;
     room.players.push({
-      playerId,
-      name: sanitizeName(req.name),
+      playerId: userId,
+      name: username,
       seat,
       avatar: avatarForSeat(seat),
       connected: true,
       socketId: socket.id,
       disconnectTimer: null,
     });
-    this.bindSocket(socket, code, playerId);
+    this.bindSocket(socket, code);
 
-    log.info(`Room ${code} created by ${playerId}`);
+    log.info(`Room ${code} created by ${username} (${userId})`);
     ack?.({ ok: true, roomCode: code });
     this.broadcastRoom(room);
   }
 
   private onJoinRoom(socket: Socket, req: JoinRoomReq, ack: Ack<JoinRoomRes>): void {
+    const identity = this.identityOf(socket);
+    if (!identity) return ack?.({ ok: false, error: 'Not authenticated' });
+    const { userId, username } = identity;
     const roomCode = String(req?.roomCode ?? '').trim().toUpperCase();
-    const playerId = String(req?.playerId ?? '').trim();
-    if (!playerId) return ack?.({ ok: false, error: 'Missing player id' });
 
     const room = this.rooms.get(roomCode);
     if (!room) return ack?.({ ok: false, error: 'Room not found' });
 
-    // Reconnection / re-entry: a known player id reclaims its held seat.
-    const existing = room.playerById(playerId);
+    // Reconnection / re-entry: the authenticated user reclaims its held seat.
+    const existing = room.playerById(userId);
     if (existing) {
       if (existing.disconnectTimer) {
         clearTimeout(existing.disconnectTimer);
@@ -136,10 +142,10 @@ export class GameServer {
       }
       existing.connected = true;
       existing.socketId = socket.id;
-      existing.name = sanitizeName(req.name);
-      this.bindSocket(socket, roomCode, playerId);
+      existing.name = username;
+      this.bindSocket(socket, roomCode);
       ack?.({ ok: true, seat: existing.seat });
-      log.info(`Player ${playerId} reconnected to ${roomCode} (seat ${existing.seat})`);
+      log.info(`Player ${username} reconnected to ${roomCode} (seat ${existing.seat})`);
       this.startIfReady(room);
       this.broadcastRoom(room);
       return;
@@ -151,17 +157,17 @@ export class GameServer {
     if (seat === null) return ack?.({ ok: false, error: 'Room is full' });
 
     room.players.push({
-      playerId,
-      name: sanitizeName(req.name),
+      playerId: userId,
+      name: username,
       seat,
       avatar: avatarForSeat(seat),
       connected: true,
       socketId: socket.id,
       disconnectTimer: null,
     });
-    this.bindSocket(socket, roomCode, playerId);
+    this.bindSocket(socket, roomCode);
     ack?.({ ok: true, seat });
-    log.info(`Player ${playerId} joined ${roomCode} (seat ${seat})`);
+    log.info(`Player ${username} joined ${roomCode} (seat ${seat})`);
 
     // Auto-start once the table is full and everyone is connected.
     this.startIfReady(room);
@@ -419,19 +425,24 @@ export class GameServer {
     }
   }
 
-  private bindSocket(socket: Socket, roomCode: string, playerId: string): void {
+  private bindSocket(socket: Socket, roomCode: string): void {
+    (socket.data as SocketData).roomCode = roomCode;
+  }
+
+  /** The verified identity attached by the auth middleware, or null. */
+  private identityOf(socket: Socket): { userId: string; username: string } | null {
     const data = socket.data as SocketData;
-    data.roomCode = roomCode;
-    data.playerId = playerId;
+    if (!data.userId || !data.username) return null;
+    return { userId: data.userId, username: data.username };
   }
 
   /** Resolve the room + player for a socket, or null if it's not seated. */
   private contextOf(socket: Socket): { room: Room; player: RoomPlayer } | null {
     const data = socket.data as SocketData;
-    if (!data.roomCode || !data.playerId) return null;
+    if (!data.roomCode || !data.userId) return null;
     const room = this.rooms.get(data.roomCode);
     if (!room) return null;
-    const player = room.playerById(data.playerId);
+    const player = room.playerById(data.userId);
     if (!player) return null;
     return { room, player };
   }

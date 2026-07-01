@@ -34,7 +34,7 @@ import {
   type SelfState,
 } from '@cardadda/shared';
 import { sound } from './audio';
-import { getPlayerId } from './playerId';
+import { useAuth } from './authContext';
 
 const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL ?? 'http://localhost:4000';
 
@@ -48,8 +48,8 @@ interface TableContextValue {
   playAgainCode: string | null;
   clearError: () => void;
   consumePlayAgainCode: () => void;
-  createRoom: (name: string) => Promise<CreateRoomRes>;
-  joinRoom: (roomCode: string, name: string) => Promise<JoinRoomRes>;
+  createRoom: () => Promise<CreateRoomRes>;
+  joinRoom: (roomCode: string) => Promise<JoinRoomRes>;
   placeBid: (bid: number) => void;
   playCard: (card: Card) => void;
   leaveRoom: () => void;
@@ -59,8 +59,16 @@ interface TableContextValue {
 const TableContext = createContext<TableContextValue | null>(null);
 
 export function TableProvider({ children }: { children: React.ReactNode }) {
+  const { token } = useAuth();
   const socketRef = useRef<Socket | null>(null);
+  const tokenRef = useRef<string | null>(token);
   const prevTrickLen = useRef(0);
+
+  // Keep the latest token available to the socket's auth callback (used on every
+  // connect/reconnect) without recreating the socket.
+  useEffect(() => {
+    tokenRef.current = token;
+  }, [token]);
 
   const [connected, setConnected] = useState(false);
   const [room, setRoom] = useState<PublicRoomState | null>(null);
@@ -73,7 +81,12 @@ export function TableProvider({ children }: { children: React.ReactNode }) {
   /** Lazily create and wire the socket on first use. */
   const ensureSocket = useCallback((): Socket => {
     if (socketRef.current) return socketRef.current;
-    const socket = io(SOCKET_URL, { transports: ['websocket'], autoConnect: true });
+    const socket = io(SOCKET_URL, {
+      transports: ['websocket'],
+      autoConnect: true,
+      // The handshake auth token is resolved fresh on each (re)connect.
+      auth: (cb) => cb({ token: tokenRef.current ?? '' }),
+    });
     socketRef.current = socket;
 
     socket.on('connect', () => setConnected(true));
@@ -114,19 +127,20 @@ export function TableProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const createRoom = useCallback(
-    (name: string) =>
+    () =>
       new Promise<CreateRoomRes>((resolve) => {
         const socket = ensureSocket();
-        socket.emit(ClientEvents.CreateRoom, { playerId: getPlayerId(), name }, resolve);
+        // Identity comes from the authenticated handshake — no payload needed.
+        socket.emit(ClientEvents.CreateRoom, resolve);
       }),
     [ensureSocket],
   );
 
   const joinRoom = useCallback(
-    (roomCode: string, name: string) =>
+    (roomCode: string) =>
       new Promise<JoinRoomRes>((resolve) => {
         const socket = ensureSocket();
-        socket.emit(ClientEvents.JoinRoom, { roomCode, playerId: getPlayerId(), name }, resolve);
+        socket.emit(ClientEvents.JoinRoom, { roomCode }, resolve);
       }),
     [ensureSocket],
   );

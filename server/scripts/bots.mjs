@@ -12,14 +12,17 @@ if (!code) {
 const BOTS = ['bot-1', 'bot-2', 'bot-3'];
 
 for (const pid of BOTS) {
-  const s = io(URL, { transports: ['websocket'], forceNew: true });
+  // Authenticate with a dev-auth handshake token (server needs DEV_AUTH=1).
+  const s = io(URL, { transports: ['websocket'], forceNew: true, auth: { token: `dev:${pid}` } });
   const acted = new Set();
 
   s.on('connect', () => {
-    s.emit('join_room', { roomCode: code, playerId: pid, name: pid }, (res) => {
+    s.emit('join_room', { roomCode: code }, (res) => {
       if (!res?.ok) console.log(`${pid} join failed:`, res?.error);
     });
   });
+
+  s.on('connect_error', (e) => console.log(`${pid} connect_error:`, e.message));
 
   s.on('room_state_update', ({ room, self }) => {
     if (!self) return;

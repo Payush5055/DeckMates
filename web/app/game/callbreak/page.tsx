@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useTable } from '@/lib/socketContext';
-import { getSavedName, saveName } from '@/lib/playerId';
+import { useAuth } from '@/lib/authContext';
 import { sound } from '@/lib/audio';
 import { Button } from '@/components/ui/Button';
 import { SuitBullet, SuitDivider } from '@/components/ui/SuitDivider';
@@ -21,27 +21,25 @@ const RULES = [
 
 export default function CallbreakDetailPage() {
   const router = useRouter();
-  const { createRoom } = useTable();
-  // Start empty so SSR and the first client render match; hydrate the saved
-  // name after mount to avoid a `disabled`-prop hydration mismatch.
-  const [name, setName] = useState('');
+  const { createRoom, joinRoom } = useTable();
+  const { ready, user, needsUsername, signOut } = useAuth();
   const [joinCode, setJoinCode] = useState('');
-
-  useEffect(() => {
-    setName(getSavedName());
-  }, []);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const ready = name.trim().length > 0;
+  // Auth guard: joining a table requires being signed in with a username.
+  useEffect(() => {
+    if (ready && (!user || needsUsername)) {
+      router.replace(`/login?next=${encodeURIComponent('/game/callbreak')}`);
+    }
+  }, [ready, user, needsUsername, router]);
 
   async function handleCreate() {
-    if (!ready || busy) return;
+    if (busy) return;
     setBusy(true);
     setError(null);
-    saveName(name);
     sound.init(); // unlock audio on first gesture
-    const res = await createRoom(name.trim());
+    const res = await createRoom();
     if (res.ok && res.roomCode) {
       router.push(`/table/${res.roomCode}`);
     } else {
@@ -51,7 +49,7 @@ export default function CallbreakDetailPage() {
   }
 
   async function handleJoin() {
-    if (!ready || busy) return;
+    if (busy) return;
     const code = joinCode.trim().toUpperCase();
     if (code.length < 4) {
       setError('Enter a room code');
@@ -59,7 +57,6 @@ export default function CallbreakDetailPage() {
     }
     setBusy(true);
     setError(null);
-    saveName(name);
     sound.init();
     // Validate the room exists before navigating (nicer than a dead table page).
     try {
@@ -73,7 +70,14 @@ export default function CallbreakDetailPage() {
     } catch {
       // If the check fails (server down), let the table page surface the error.
     }
+    void joinRoom; // join happens on the table page after navigation
     router.push(`/table/${code}`);
+  }
+
+  if (!ready || !user || needsUsername) {
+    return (
+      <main className="flex min-h-screen items-center justify-center text-muted">Loading…</main>
+    );
   }
 
   return (
@@ -82,9 +86,17 @@ export default function CallbreakDetailPage() {
         <Link href="/" className="font-serif text-xl text-gold">
           DeckMates
         </Link>
-        <Link href="/history" className="text-sm text-muted hover:text-ink">
-          Match history
-        </Link>
+        <div className="flex items-center gap-4 text-sm text-muted">
+          <span>
+            Signed in as <span className="text-ink">{user.username}</span>
+          </span>
+          <button onClick={() => void signOut()} className="hover:text-ink">
+            Sign out
+          </button>
+          <Link href="/history" className="hover:text-ink">
+            History
+          </Link>
+        </div>
       </nav>
 
       <header className="rounded-3xl bg-surface px-8 py-10 shadow-table ring-1 ring-gold/20">
@@ -108,16 +120,7 @@ export default function CallbreakDetailPage() {
 
         {/* Actions */}
         <div className="rounded-2xl bg-surface p-6 ring-1 ring-gold/20">
-          <label className="mb-1 block text-sm text-muted">Display name</label>
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            maxLength={20}
-            placeholder="e.g. Priya"
-            className="mb-4 w-full rounded-xl bg-rim/60 px-4 py-3 text-ink outline-none ring-1 ring-ink/20 focus:ring-gold/60"
-          />
-
-          <Button className="w-full" onClick={handleCreate} disabled={!ready || busy}>
+          <Button className="w-full" onClick={handleCreate} disabled={busy}>
             Create table
           </Button>
 
@@ -132,13 +135,12 @@ export default function CallbreakDetailPage() {
               placeholder="ABC123"
               className="tabular w-full rounded-xl bg-rim/60 px-4 py-3 tracking-[0.2em] text-ink outline-none ring-1 ring-ink/20 focus:ring-gold/60"
             />
-            <Button variant="ghost" onClick={handleJoin} disabled={!ready || busy}>
+            <Button variant="ghost" onClick={handleJoin} disabled={busy}>
               Join
             </Button>
           </div>
 
           {error && <p className="mt-3 text-sm text-wine">{error}</p>}
-          {!ready && <p className="mt-3 text-xs text-muted">Enter a display name to create or join.</p>}
         </div>
       </section>
     </main>

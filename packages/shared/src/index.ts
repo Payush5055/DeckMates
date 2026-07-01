@@ -98,10 +98,9 @@ export interface GameOverPayload {
 
 /* ── Client → Server request/ack payloads ─────────────────────────────────── */
 
-export interface CreateRoomReq {
-  playerId: string;
-  name: string;
-}
+// Identity (user id + username) is derived from the authenticated socket
+// handshake and verified server-side — clients no longer send it. Creating a
+// room therefore needs no payload.
 export interface CreateRoomRes {
   ok: boolean;
   roomCode?: string;
@@ -110,8 +109,6 @@ export interface CreateRoomRes {
 
 export interface JoinRoomReq {
   roomCode: string;
-  playerId: string;
-  name: string;
 }
 export interface JoinRoomRes {
   ok: boolean;

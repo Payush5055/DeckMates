@@ -4,11 +4,9 @@ import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useTable } from '@/lib/socketContext';
-import { getSavedName, saveName } from '@/lib/playerId';
-import { sound } from '@/lib/audio';
+import { useAuth } from '@/lib/authContext';
 import { TableSurface } from '@/components/table/TableSurface';
 import { Avatar } from '@/components/table/Avatar';
-import { Button } from '@/components/ui/Button';
 import { MuteToggle } from '@/components/ui/MuteToggle';
 import { Countdown } from '@/components/phases/Countdown';
 import { Dealing } from '@/components/phases/Dealing';
@@ -38,30 +36,29 @@ export function TableView({ code }: { code: string }) {
     leaveRoom,
     playAgain,
   } = useTable();
+  const { ready: authReady, user, needsUsername } = useAuth();
   const router = useRouter();
 
-  const [needName, setNeedName] = useState(false);
-  const [nameInput, setNameInput] = useState('');
   const [copied, setCopied] = useState(false);
   const [intro, setIntro] = useState<Intro>(null);
   const attempted = useRef(false);
   const introducedRound = useRef(-1);
 
-  // Join (or reclaim seat) on mount, prompting for a name if we don't have one.
+  // Auth guard, then join (or reclaim seat) on mount. Signing in is required.
   useEffect(() => {
+    if (!authReady) return;
+    if (!user || needsUsername) {
+      router.replace(`/login?next=${encodeURIComponent(`/table/${code}`)}`);
+      return;
+    }
     if (attempted.current) return;
     if (room?.roomCode === code) {
       attempted.current = true;
       return;
     }
-    const saved = getSavedName();
-    if (saved) {
-      attempted.current = true;
-      void joinRoom(code, saved);
-    } else {
-      setNeedName(true);
-    }
-  }, [room, code, joinRoom]);
+    attempted.current = true;
+    void joinRoom(code);
+  }, [authReady, user, needsUsername, room, code, joinRoom, router]);
 
   // A "play again" broadcast moves everyone to the new room.
   useEffect(() => {
@@ -87,16 +84,6 @@ export function TableView({ code }: { code: string }) {
     }
   }, [room]);
 
-  function submitName(e: React.FormEvent) {
-    e.preventDefault();
-    const name = nameInput.trim() || 'Player';
-    saveName(name);
-    sound.init();
-    setNeedName(false);
-    attempted.current = true;
-    void joinRoom(code, name);
-  }
-
   function copyCode() {
     void navigator.clipboard?.writeText(code);
     setCopied(true);
@@ -108,23 +95,11 @@ export function TableView({ code }: { code: string }) {
     router.push('/');
   }
 
-  // ── Gate: name entry / connecting ─────────────────────────────────────────
-  if (needName) {
+  // ── Gate: auth / connecting ───────────────────────────────────────────────
+  if (!authReady || !user || needsUsername) {
     return (
       <CenteredCard>
-        <h1 className="font-serif text-2xl text-ink">Join table {code}</h1>
-        <p className="mt-1 text-sm text-muted">Pick a display name to take a seat.</p>
-        <form onSubmit={submitName} className="mt-4 flex flex-col gap-3">
-          <input
-            autoFocus
-            value={nameInput}
-            onChange={(e) => setNameInput(e.target.value)}
-            maxLength={20}
-            placeholder="Your name"
-            className="rounded-xl bg-rim/60 px-4 py-3 text-ink outline-none ring-1 ring-ink/20 focus:ring-gold/60"
-          />
-          <Button type="submit">Take a seat</Button>
-        </form>
+        <p className="text-muted">Signing you in…</p>
       </CenteredCard>
     );
   }

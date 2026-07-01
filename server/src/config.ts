@@ -10,6 +10,11 @@ export const config = {
   roundEndDelayMs: Number(process.env.ROUND_END_DELAY_MS ?? 4_000),
   supabaseUrl: process.env.SUPABASE_URL ?? '',
   supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY ?? '',
+  /**
+   * Dev-only auth bypass. When '1'/'true', the server accepts `dev:<username>`
+   * handshake tokens (deriving a stable fake user id). MUST be off in prod.
+   */
+  devAuth: /^(1|true)$/i.test(process.env.DEV_AUTH ?? ''),
 };
 
 /** True when Supabase credentials are present; otherwise we use in-memory. */
