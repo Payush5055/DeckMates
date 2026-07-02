@@ -4,33 +4,78 @@ import { Card, Seat } from './types';
 
 const c = (suit: Card['suit'], rank: Card['rank']): Card => ({ suit, rank });
 
-describe('isLegalPlay (relaxed follow-suit)', () => {
-  const hand: Card[] = [c('H', 10), c('H', 4), c('S', 12), c('C', 7)];
+/** Build a trick (board) from cards; seats are arbitrary for legality checks. */
+const board = (...cards: Card[]): TrickPlay[] => cards.map((card, i) => ({ seat: (i % 4) as Seat, card }));
 
-  it('allows any held card when leading (no lead suit yet)', () => {
-    expect(isLegalPlay(hand, null, c('S', 12))).toBe(true);
-    expect(isLegalPlay(hand, null, c('C', 7))).toBe(true);
+describe('isLegalPlay (full strict — no ducking)', () => {
+  it('allows any held card when leading (empty trick)', () => {
+    const hand = [c('H', 10), c('S', 12), c('C', 7)];
+    expect(isLegalPlay(hand, [], c('S', 12))).toBe(true);
+    expect(isLegalPlay(hand, [], c('C', 7))).toBe(true);
   });
 
   it('rejects a card the player does not hold', () => {
-    expect(isLegalPlay(hand, null, c('D', 9))).toBe(false);
+    expect(isLegalPlay([c('H', 10)], [], c('D', 9))).toBe(false);
   });
 
   it('forces following the lead suit when the player holds it', () => {
-    // Lead is hearts and the hand has hearts → must play a heart.
-    expect(isLegalPlay(hand, 'H', c('H', 10))).toBe(true);
-    expect(isLegalPlay(hand, 'H', c('S', 12))).toBe(false); // spade not allowed here
-    expect(isLegalPlay(hand, 'H', c('C', 7))).toBe(false);
+    const hand = [c('H', 10), c('H', 4), c('S', 12), c('C', 7)];
+    const trick = board(c('H', 5));
+    expect(isLegalPlay(hand, trick, c('S', 12))).toBe(false); // can't cut, holds hearts
+    expect(isLegalPlay(hand, trick, c('C', 7))).toBe(false);
   });
 
-  it('allows any card (including a non-trump) when void of the lead suit', () => {
-    // Lead is diamonds; hand has no diamonds → anything goes, no forced trump.
-    expect(isLegalPlay(hand, 'D', c('C', 7))).toBe(true); // discard, not forced to spade
-    expect(isLegalPlay(hand, 'D', c('S', 12))).toBe(true); // may trump if desired
+  it('must HEAD the trick when it can (no ducking)', () => {
+    // Lead H, King on board. Hand can beat it with the Ace → must.
+    const hand = [c('H', 14), c('H', 10), c('H', 4)];
+    const trick = board(c('H', 13));
+    expect(isLegalPlay(hand, trick, c('H', 14))).toBe(true); // beats
+    expect(isLegalPlay(hand, trick, c('H', 10))).toBe(false); // ducking not allowed
+    expect(isLegalPlay(hand, trick, c('H', 4))).toBe(false);
+    expect(legalPlays(hand, trick).map((x) => x.rank)).toEqual([14]);
   });
 
-  it('legalPlays lists exactly the followable cards when holding the lead suit', () => {
-    expect(legalPlays(hand, 'H').map((x) => x.rank).sort((a, b) => a - b)).toEqual([4, 10]);
+  it('may play any lead-suit card when it cannot beat the board', () => {
+    const hand = [c('H', 10), c('H', 4)];
+    const trick = board(c('H', 14)); // Ace already down — can't beat
+    expect(isLegalPlay(hand, trick, c('H', 10))).toBe(true);
+    expect(isLegalPlay(hand, trick, c('H', 4))).toBe(true);
+  });
+
+  it('once a spade has cut, following-suit cards need not beat', () => {
+    // Lead H, then a spade cut. Holder of hearts must follow but can play low.
+    const hand = [c('H', 13), c('H', 2)];
+    const trick = board(c('H', 9), c('S', 3)); // spade cut the hearts
+    expect(isLegalPlay(hand, trick, c('H', 2))).toBe(true);
+    expect(isLegalPlay(hand, trick, c('H', 13))).toBe(true);
+  });
+
+  it('must CUT with a spade when void of the lead suit', () => {
+    const hand = [c('H', 9), c('S', 5)];
+    const trick = board(c('D', 10));
+    expect(isLegalPlay(hand, trick, c('H', 9))).toBe(false); // must cut, holds a spade
+    expect(isLegalPlay(hand, trick, c('S', 5))).toBe(true);
+  });
+
+  it('must OVERCUT a higher spade when one has already cut', () => {
+    const hand = [c('S', 9), c('S', 3)];
+    const trick = board(c('D', 10), c('S', 5)); // a 5♠ already cut
+    expect(isLegalPlay(hand, trick, c('S', 9))).toBe(true); // 9 > 5
+    expect(isLegalPlay(hand, trick, c('S', 3))).toBe(false); // 3 can't overcut
+  });
+
+  it('may play any spade when it cannot overcut', () => {
+    const hand = [c('S', 5), c('S', 3)];
+    const trick = board(c('D', 10), c('S', 10)); // 10♠ down — can't beat
+    expect(isLegalPlay(hand, trick, c('S', 5))).toBe(true);
+    expect(isLegalPlay(hand, trick, c('S', 3))).toBe(true);
+  });
+
+  it('may discard anything when void of both the lead suit and spades', () => {
+    const hand = [c('H', 9), c('C', 7)];
+    const trick = board(c('D', 10));
+    expect(isLegalPlay(hand, trick, c('H', 9))).toBe(true);
+    expect(isLegalPlay(hand, trick, c('C', 7))).toBe(true);
   });
 });
 

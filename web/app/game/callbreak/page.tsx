@@ -6,28 +6,31 @@ import { useTable } from '@/lib/socketContext';
 import { useAuth } from '@/lib/authContext';
 import { sound } from '@/lib/audio';
 import { Button } from '@/components/ui/Button';
+import { Overlay } from '@/components/ui/Overlay';
 import { SuitBullet, SuitDivider } from '@/components/ui/SuitDivider';
+import type { CreateRoomReq } from '@cardadda/shared';
 
 const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL ?? 'http://localhost:4000';
 
 const RULES = [
   'Four players, one standard 52-card deck, 13 cards each.',
-  'Bid how many tricks you’ll win (1–8) before play begins.',
-  'Spades are always trump. Follow the lead suit if you can.',
+  'Bid how many tricks you’ll win (1–8) before play begins — everyone bids at once, blind.',
+  'Spades are always trump. Follow suit and beat the trick when you can — no ducking; cut with a spade when void.',
   'Make your bid: score your bid + 0.1 per extra trick. Miss it: lose your bid.',
   'Highest total after 5 rounds wins.',
 ];
 
 export default function CallbreakDetailPage() {
   const router = useRouter();
-  const { createRoom, joinRoom } = useTable();
+  const { createRoom } = useTable();
   const { ready, user, needsUsername } = useAuth();
   const [joinCode, setJoinCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [chooserOpen, setChooserOpen] = useState(false);
+  const [teammates, setTeammates] = useState(1);
 
   // Browsing this page is public; only ACTING (create/join) requires sign-in.
-  // Returns false after redirecting a signed-out player to /login?next=….
   function requireSignIn(): boolean {
     if (!ready) return false;
     if (!user || needsUsername) {
@@ -37,17 +40,24 @@ export default function CallbreakDetailPage() {
     return true;
   }
 
-  async function handleCreate() {
+  function openChooser() {
     if (busy || !requireSignIn()) return;
+    setError(null);
+    setChooserOpen(true);
+  }
+
+  async function createWithMode(req: CreateRoomReq) {
+    if (busy) return;
     setBusy(true);
     setError(null);
     sound.init(); // unlock audio on first gesture
-    const res = await createRoom();
+    const res = await createRoom(req);
     if (res.ok && res.roomCode) {
       router.push(`/table/${res.roomCode}`);
     } else {
       setError(res.error ?? 'Could not create a table');
       setBusy(false);
+      setChooserOpen(false);
     }
   }
 
@@ -61,7 +71,6 @@ export default function CallbreakDetailPage() {
     setBusy(true);
     setError(null);
     sound.init();
-    // Validate the room exists before navigating (nicer than a dead table page).
     try {
       const res = await fetch(`${SOCKET_URL}/api/rooms/${code}`);
       const data = (await res.json()) as { exists: boolean };
@@ -73,13 +82,9 @@ export default function CallbreakDetailPage() {
     } catch {
       // If the check fails (server down), let the table page surface the error.
     }
-    void joinRoom; // join happens on the table page after navigation
     router.push(`/table/${code}`);
   }
 
-  // This page is PUBLIC — rules and description render for everyone. Sign-in
-  // state lives in the global header; creating/joining redirects via
-  // requireSignIn() when signed out.
   return (
     <main className="mx-auto max-w-3xl px-4 pb-16">
       <header className="mt-2 rounded-3xl bg-surface px-8 py-10 shadow-table ring-1 ring-gold/20">
@@ -103,7 +108,7 @@ export default function CallbreakDetailPage() {
 
         {/* Actions */}
         <div className="rounded-2xl bg-surface p-6 ring-1 ring-gold/20">
-          <Button className="w-full" onClick={handleCreate} disabled={busy}>
+          <Button className="w-full" onClick={openChooser} disabled={busy}>
             Create table
           </Button>
 
@@ -126,6 +131,65 @@ export default function CallbreakDetailPage() {
           {error && <p className="mt-3 text-sm text-wine">{error}</p>}
         </div>
       </section>
+
+      {chooserOpen && (
+        <Overlay>
+          <div className="w-full max-w-md rounded-2xl bg-surface p-6 shadow-table ring-1 ring-gold/30">
+            <h2 className="text-center font-serif text-2xl text-ink">Start a table</h2>
+            <SuitDivider className="my-4" />
+
+            {/* Play with bots */}
+            <button
+              onClick={() => void createWithMode({ mode: 'bots' })}
+              disabled={busy}
+              className="w-full rounded-xl bg-gold px-5 py-4 text-left text-rim transition hover:brightness-110 disabled:opacity-50"
+            >
+              <span className="block font-medium">Play with bots</span>
+              <span className="block text-sm opacity-80">Start now — the other 3 seats are bots.</span>
+            </button>
+
+            {/* Play with teammates */}
+            <div className="mt-4 rounded-xl bg-rim/40 p-4 ring-1 ring-ink/15">
+              <p className="font-medium text-ink">Play with teammates</p>
+              <p className="mb-3 text-sm text-muted">
+                How many friends are joining? Empty seats fill with bots once they’re in.
+              </p>
+              <div className="mb-4 flex gap-2">
+                {[1, 2, 3].map((n) => (
+                  <button
+                    key={n}
+                    onClick={() => setTeammates(n)}
+                    className={`tabular h-11 flex-1 rounded-lg text-lg transition ${
+                      teammates === n
+                        ? 'bg-gold text-rim'
+                        : 'bg-surface text-ink ring-1 ring-gold/40 hover:bg-gold/20'
+                    }`}
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
+              <Button
+                variant="secondary"
+                className="w-full"
+                disabled={busy}
+                onClick={() => void createWithMode({ mode: 'teammates', teammates })}
+              >
+                Create room for {teammates + 1} players
+              </Button>
+            </div>
+
+            <button
+              onClick={() => setChooserOpen(false)}
+              disabled={busy}
+              className="mt-4 w-full text-center text-sm text-muted hover:text-ink"
+            >
+              Cancel
+            </button>
+            {error && <p className="mt-3 text-center text-sm text-wine">{error}</p>}
+          </div>
+        </Overlay>
+      )}
     </main>
   );
 }

@@ -19,8 +19,9 @@ machine. Unit-tested in isolation and reusable when we add more games later.
 These were the ambiguous points; confirmed with product before implementation:
 
 - **No nil/zero bid.** Bids are whole numbers **1–8** (`MIN_BID`/`MAX_BID`).
-- **Relaxed follow-suit.** You must follow the lead suit only if you hold it;
-  otherwise any card is legal (no forced "must beat", no forced trump when void).
+- **Full strict follow-suit (no ducking).** Follow the lead suit if able and
+  head the trick when you can; if void, cut with a spade (and overcut a higher
+  spade if one has already cut); only when void of both may you discard freely.
 - **Spades are always trump** for *winning* a trick: highest spade wins; with no
   spade, the highest card of the lead suit wins.
 - **Scoring** (kept as integer **tenths** internally to avoid float drift):

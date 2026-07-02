@@ -24,6 +24,7 @@ import {
   ClientEvents,
   ServerEvents,
   type Card,
+  type CreateRoomReq,
   type CreateRoomRes,
   type GameOverPayload,
   type JoinRoomRes,
@@ -48,7 +49,7 @@ interface TableContextValue {
   playAgainCode: string | null;
   clearError: () => void;
   consumePlayAgainCode: () => void;
-  createRoom: () => Promise<CreateRoomRes>;
+  createRoom: (req: CreateRoomReq) => Promise<CreateRoomRes>;
   joinRoom: (roomCode: string) => Promise<JoinRoomRes>;
   placeBid: (bid: number) => void;
   playCard: (card: Card) => void;
@@ -127,11 +128,12 @@ export function TableProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const createRoom = useCallback(
-    () =>
+    (req: CreateRoomReq) =>
       new Promise<CreateRoomRes>((resolve) => {
         const socket = ensureSocket();
-        // Identity comes from the authenticated handshake — no payload needed.
-        socket.emit(ClientEvents.CreateRoom, resolve);
+        // Identity comes from the authenticated handshake; the payload is the
+        // chosen table mode (bots vs teammates).
+        socket.emit(ClientEvents.CreateRoom, req, resolve);
       }),
     [ensureSocket],
   );

@@ -24,10 +24,17 @@ export interface PublicPlayer {
   avatar: string;
   connected: boolean;
   isHost: boolean;
+  /** True for a server-controlled bot seat. */
+  isBot: boolean;
   /** How many cards this player holds — a count only, never the cards. */
   cardCount: number;
-  /** This player's bid, once placed (public per the rules). */
+  /**
+   * This player's bid. Blind during bidding: stays `null` for everyone until all
+   * four bids are in (phase → playing), then the real values are revealed.
+   */
   bid: number | null;
+  /** Whether this seat has submitted a bid — safe to reveal while bids stay blind. */
+  hasBid: boolean;
   tricksWon: number;
 }
 
@@ -64,6 +71,8 @@ export interface SelfState {
   hand: Card[];
   /** Cards currently legal to play (empty unless it's this player's turn). */
   legalPlays: Card[];
+  /** This player's OWN bid this round (always visible to themselves), or null. */
+  bid: number | null;
 }
 
 /** Payload of every `room_state_update`: shared state + your private slice. */
@@ -80,12 +89,15 @@ export interface RoundResultPayload {
   cumulativeTenths: number[];
   /** Player display names indexed by seat, for convenient rendering. */
   playerNames: string[];
+  /** Whether each seat (by index) is a bot. */
+  isBot: boolean[];
 }
 
 export interface FinalStanding {
   seat: Seat;
   playerId: string;
   name: string;
+  isBot: boolean;
   totalTenths: number;
   /** 1-based placement; tied totals share a rank. */
   rank: number;
@@ -99,8 +111,18 @@ export interface GameOverPayload {
 /* ── Client → Server request/ack payloads ─────────────────────────────────── */
 
 // Identity (user id + username) is derived from the authenticated socket
-// handshake and verified server-side — clients no longer send it. Creating a
-// room therefore needs no payload.
+// handshake and verified server-side — clients never send it. The only payload
+// is the table mode chosen before creation.
+export interface CreateRoomReq {
+  /**
+   * 'bots' — fill all 3 other seats with bots and start immediately (no waiting
+   * room). 'teammates' — wait for `teammates` real players to join, then fill
+   * any remaining seats with bots and start.
+   */
+  mode: 'bots' | 'teammates';
+  /** For 'teammates' mode: how many real teammates to wait for (1–3). */
+  teammates?: number;
+}
 export interface CreateRoomRes {
   ok: boolean;
   roomCode?: string;

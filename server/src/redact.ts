@@ -20,6 +20,9 @@ import { Room, RoomPlayer } from './room';
 /** Public table state — safe to send to everyone. Carries no hands. */
 export function buildPublicRoomState(room: Room): PublicRoomState {
   const game = room.game;
+  // Blind bidding: while still in the bidding phase, no one's bid value is
+  // revealed — only whether they've submitted. Values appear once phase→playing.
+  const biddingOpen = game !== null && game.phase === 'bidding';
   const players: PublicPlayer[] = [...room.players]
     .sort((a, b) => a.seat - b.seat)
     .map((p) => ({
@@ -28,16 +31,18 @@ export function buildPublicRoomState(room: Room): PublicRoomState {
       avatar: p.avatar,
       connected: p.connected,
       isHost: p.playerId === room.hostPlayerId,
+      isBot: p.isBot,
       // Count only — the actual cards are deliberately not included.
       cardCount: game ? game.hands[p.seat]!.length : 0,
-      bid: game ? game.bids[p.seat]! : null,
+      bid: game && !biddingOpen ? game.bids[p.seat]! : null,
+      hasBid: game ? game.bids[p.seat] !== null : false,
       tricksWon: game ? game.tricksWon[p.seat]! : 0,
     }));
 
-  // Nobody is "on the clock" while a completed trick is held face-up.
+  // Nobody is "on the clock" during blind bidding (all bid at once) or while a
+  // completed trick is held face-up — only during active trick play.
   const trickHeld = game !== null && game.currentTrick.length >= NUM_PLAYERS;
-  const onClock =
-    game && (game.phase === 'bidding' || game.phase === 'playing') && !trickHeld;
+  const onClock = game !== null && game.phase === 'playing' && !trickHeld;
 
   return {
     roomCode: room.code,
@@ -70,8 +75,7 @@ export function buildSelfState(room: Room, player: RoomPlayer): SelfState {
     game.turn === player.seat &&
     game.currentTrick.length < NUM_PLAYERS
   ) {
-    const leadSuit = game.currentTrick.length > 0 ? game.currentTrick[0]!.card.suit : null;
-    legal = legalPlays(hand, leadSuit);
+    legal = legalPlays(hand, game.currentTrick);
   }
 
   return {
@@ -79,5 +83,7 @@ export function buildSelfState(room: Room, player: RoomPlayer): SelfState {
     seat: player.seat,
     hand,
     legalPlays: legal,
+    // A player always sees their own bid, even while others' stay blind.
+    bid: game ? game.bids[player.seat]! : null,
   };
 }

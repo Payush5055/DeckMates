@@ -76,7 +76,7 @@ export function TableView({ code }: { code: string }) {
     const freshRound =
       room.phase === 'bidding' &&
       room.players.length === 4 &&
-      room.players.every((p) => p.bid === null) &&
+      room.players.every((p) => !p.hasBid) &&
       introducedRound.current !== room.roundNumber;
     if (freshRound) {
       introducedRound.current = room.roundNumber;
@@ -113,10 +113,13 @@ export function TableView({ code }: { code: string }) {
   }
 
   const you = self.seat;
-  const myBid = room.players.find((p) => p.seat === you)?.bid ?? null;
+  // Bidding is blind, so a player's own bid comes from their private `self`
+  // state — never from the (redacted) public players list.
+  const myBid = self.bid;
   const isMyTurn = room.turn === you;
   const legalIds = new Set(self.legalPlays.map(cardId));
-  const canBid = !intro && room.phase === 'bidding' && isMyTurn && myBid === null;
+  const bidsIn = room.players.filter((p) => p.hasBid).length;
+  const canBid = !intro && room.phase === 'bidding' && myBid === null;
   const canPlay = !intro && room.phase === 'playing' && isMyTurn;
   const showHand = !intro && (room.phase === 'bidding' || room.phase === 'playing') && self.hand.length > 0;
 
@@ -158,15 +161,18 @@ export function TableView({ code }: { code: string }) {
           {/* Seats */}
           {room.players.map((p) => {
             const pos = relativePosition(p.seat, you);
+            // Blind bidding: show a submitted/waiting tick, never the value.
+            // During play: the live "tricks won / bid" counter.
             const badge = intro
               ? undefined
               : room.phase === 'bidding'
-                ? p.bid !== null
-                  ? `bid ${p.bid}`
-                  : undefined
+                ? p.hasBid
+                  ? '✓ bid in'
+                  : '…'
                 : room.phase === 'playing' || room.phase === 'roundEnd'
                   ? `${p.tricksWon}/${p.bid ?? 0}`
                   : undefined;
+            const isActive = room.turn === p.seat && !intro && room.phase === 'playing';
             return (
               <div
                 key={p.seat}
@@ -176,7 +182,11 @@ export function TableView({ code }: { code: string }) {
                 <Avatar
                   color={POS_COLOR[pos]}
                   connected={p.connected}
-                  active={room.turn === p.seat && !intro}
+                  active={isActive}
+                  label={p.isBot ? 'Bot' : p.name}
+                  isBot={p.isBot}
+                  isYou={p.seat === you}
+                  turnLabel={isActive ? (p.seat === you ? 'Your turn' : 'Playing…') : undefined}
                   badge={badge}
                 />
               </div>
@@ -194,8 +204,9 @@ export function TableView({ code }: { code: string }) {
             </div>
           )}
           {!intro && room.phase === 'bidding' && (
-            <div className="pointer-events-none absolute left-1/2 top-[46%] -translate-x-1/2 -translate-y-1/2 text-center font-serif text-lg text-ink/80">
-              {isMyTurn && myBid === null ? 'Your bid' : 'Bidding…'}
+            <div className="pointer-events-none absolute left-1/2 top-[44%] -translate-x-1/2 -translate-y-1/2 text-center">
+              <p className="font-serif text-lg text-ink/85">Bidding — blind</p>
+              <p className="tabular text-sm text-gold">{bidsIn}/4 bid in</p>
             </div>
           )}
         </TableSurface>
@@ -215,13 +226,13 @@ export function TableView({ code }: { code: string }) {
         </div>
       )}
 
-      {/* Bidding controls */}
+      {/* Bidding controls — everyone bids at once, privately. */}
       {!intro && room.phase === 'bidding' && (
         <div className="mt-5">
           {canBid ? (
             <BiddingControls onBid={placeBid} disabled={false} />
           ) : (
-            <p className="text-center text-muted">Waiting for other players to bid…</p>
+            <p className="text-center text-muted">Bid placed — waiting for the others… ({bidsIn}/4)</p>
           )}
         </div>
       )}
@@ -230,7 +241,7 @@ export function TableView({ code }: { code: string }) {
       {showHand && (
         <div className="mt-auto">
           {room.phase === 'playing' && (
-            <p className="mb-1 text-center text-sm text-muted">
+            <p className={`mb-1 text-center ${canPlay ? 'font-serif text-lg text-gold' : 'text-sm text-muted'}`}>
               {canPlay ? 'Your turn — play a card' : 'Waiting for your turn…'}
             </p>
           )}

@@ -96,13 +96,14 @@ export function createGame(rng: RNG = Math.random, startingDealer: Seat = 0): Ga
 }
 
 /**
- * Place a bid for `seat`. Bids happen once each, in clockwise order, starting
- * left of the dealer. When the fourth bid lands, the phase flips to `playing`
- * and the turn passes to the first leader.
+ * Place a bid for `seat`. Bidding is SIMULTANEOUS and blind: any seat may bid at
+ * any time (there is no bidding turn order), each seat once. The engine records
+ * the value but never reveals it — hiding bids from other players until all four
+ * are in is the transport layer's job (see the server's redaction). When the
+ * fourth bid lands, the phase flips to `playing` and the first leader is on.
  */
 export function placeBid(state: GameState, seat: Seat, bid: number): GameState {
   if (state.phase !== 'bidding') throw new RuleViolation('Not in the bidding phase');
-  if (seat !== state.turn) throw new RuleViolation('It is not your turn to bid');
   if (state.bids[seat] !== null) throw new RuleViolation('You have already bid this round');
   if (!Number.isInteger(bid) || bid < MIN_BID || bid > MAX_BID) {
     throw new RuleViolation(`Bid must be a whole number from ${MIN_BID} to ${MAX_BID}`);
@@ -116,8 +117,9 @@ export function placeBid(state: GameState, seat: Seat, bid: number): GameState {
     ...state,
     bids,
     phase: allBidsIn ? 'playing' : 'bidding',
-    // During bidding, go clockwise. Once complete, the first leader plays first.
-    turn: allBidsIn ? state.leadSeat : nextSeat(seat),
+    // `turn` has no meaning during simultaneous bidding; once complete, the
+    // first leader (left of dealer) plays first.
+    turn: state.leadSeat,
   };
 }
 
@@ -138,10 +140,9 @@ export function playCard(state: GameState, seat: Seat, card: Card): GameState {
   }
   if (seat !== state.turn) throw new RuleViolation('It is not your turn to play');
 
-  const leadSuit = state.currentTrick.length > 0 ? state.currentTrick[0]!.card.suit : null;
   const hand = state.hands[seat]!;
-  if (!isLegalPlay(hand, leadSuit, card)) {
-    throw new RuleViolation('Illegal card: you must follow the lead suit if you can');
+  if (!isLegalPlay(hand, state.currentTrick, card)) {
+    throw new RuleViolation('Illegal card: follow suit, and beat the trick, when you can');
   }
 
   // Remove the played card from the seat's hand (clone hands for immutability).

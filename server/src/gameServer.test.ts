@@ -56,9 +56,12 @@ function emitAck<T>(socket: ClientSocket, event: string, payload: unknown): Prom
   return new Promise<T>((resolve) => socket.emit(event, payload, resolve));
 }
 
-/** create_room takes no payload — just an ack callback. */
-function createRoom(socket: ClientSocket): Promise<CreateRoomRes> {
-  return new Promise<CreateRoomRes>((resolve) => socket.emit(ClientEvents.CreateRoom, resolve));
+/** create_room now takes a mode payload. Defaults to a full 4-real-player table. */
+function createRoom(
+  socket: ClientSocket,
+  req: { mode: 'bots' | 'teammates'; teammates?: number } = { mode: 'teammates', teammates: 3 },
+): Promise<CreateRoomRes> {
+  return new Promise<CreateRoomRes>((resolve) => socket.emit(ClientEvents.CreateRoom, req, resolve));
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs = 3000): Promise<void> {
@@ -99,15 +102,10 @@ async function seatFourPlayers(): Promise<{ code: string; all: Peer[] }> {
   return { code, all: [a, ...rest] };
 }
 
-/** Whoever is on the clock bids the minimum, until the playing phase begins. */
+/** Bidding is simultaneous: every player submits, then we wait for playing. */
 async function completeBidding(all: Peer[]): Promise<void> {
-  for (let i = 0; i < 4; i++) {
-    await waitFor(() => all.some((p) => p.latest?.room.turn === p.seat));
-    const onClock = all.find((p) => p.latest!.room.turn === p.seat)!;
-    const seatNow = onClock.seat;
-    onClock.socket.emit(ClientEvents.PlaceBid, { bid: 1 });
-    await waitFor(() => onClock.latest!.room.players.find((pl) => pl.seat === seatNow)?.bid === 1);
-  }
+  for (const p of all) p.socket.emit(ClientEvents.PlaceBid, { bid: 1 });
+  await waitFor(() => all.every((p) => p.latest!.room.phase === 'playing'));
 }
 
 describe('GameServer end-to-end', () => {
@@ -168,6 +166,57 @@ describe('GameServer end-to-end', () => {
     expect(everyCard).toHaveLength(52);
     expect(new Set(everyCard).size).toBe(52);
   });
+
+  it('keeps bids blind until all four are in, then reveals', async () => {
+    const { all } = await seatFourPlayers();
+    await waitFor(() => all.every((p) => p.hand.length === 13));
+
+    // Three players bid; the 4th has not.
+    all[0]!.socket.emit(ClientEvents.PlaceBid, { bid: 3 });
+    all[1]!.socket.emit(ClientEvents.PlaceBid, { bid: 5 });
+    all[2]!.socket.emit(ClientEvents.PlaceBid, { bid: 2 });
+    await waitFor(() => all[3]!.latest!.room.players.filter((pl) => pl.hasBid).length === 3);
+
+    // Still bidding: NO bid value is visible to anyone, but hasBid is truthful.
+    const mid = all[3]!.latest!.room;
+    expect(mid.phase).toBe('bidding');
+    expect(mid.players.every((pl) => pl.bid === null)).toBe(true);
+    // A player can still see their OWN bid via self.
+    expect(all[0]!.latest!.self!.bid).toBe(3);
+    expect(all[3]!.latest!.self!.bid).toBeNull();
+
+    // Fourth bid → reveal everyone's values at once.
+    all[3]!.socket.emit(ClientEvents.PlaceBid, { bid: 4 });
+    await waitFor(() => all[0]!.latest!.room.phase === 'playing');
+    const bidsBySeat = new Map<number, number | null>(
+      all[0]!.latest!.room.players.map((pl) => [pl.seat as number, pl.bid]),
+    );
+    expect(bidsBySeat.get(all[0]!.seat)).toBe(3);
+    expect(bidsBySeat.get(all[1]!.seat)).toBe(5);
+    expect(bidsBySeat.get(all[2]!.seat)).toBe(2);
+    expect(bidsBySeat.get(all[3]!.seat)).toBe(4);
+  });
+
+  it('bots mode fills the table with bots that bid and play', async () => {
+    const a = await connect('Solo');
+    const created = await createRoom(a.socket, { mode: 'bots' });
+    expect(created.ok).toBe(true);
+    a.socket.emit(ClientEvents.JoinRoom, { roomCode: created.roomCode! });
+
+    // Table auto-fills: 1 real + 3 bots, dealt in immediately.
+    await waitFor(() => a.hand.length === 13, 8000);
+    const players = a.latest!.room.players;
+    expect(players.filter((pl) => pl.isBot).length).toBe(3);
+    expect(players.find((pl) => pl.seat === a.seat)!.isBot).toBe(false);
+
+    // Human bids; bots bid on their own → playing.
+    a.socket.emit(ClientEvents.PlaceBid, { bid: 2 });
+    await waitFor(() => a.latest!.room.phase === 'playing', 10000);
+
+    // Bots lead/play until it's the human's turn — proves they act autonomously.
+    await waitFor(() => a.latest!.room.turn === a.seat, 12000);
+    expect(a.latest!.room.currentTrick.length).toBe(3);
+  }, 20000); // bots pause 0.8–1.5s per action, so allow generous time
 
   it('runs bidding then accepts a legal card play', async () => {
     const { all } = await seatFourPlayers();

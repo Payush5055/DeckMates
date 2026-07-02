@@ -36,23 +36,24 @@ describe('createGame', () => {
   });
 });
 
-describe('placeBid', () => {
-  it('advances clockwise and flips to playing after the 4th bid', () => {
-    let g = createGame(mulberry32(4), 0); // first actor 1
-    g = placeBid(g, 1, 2);
-    expect(g.turn).toBe(2);
-    g = placeBid(g, 2, 3);
+describe('placeBid (simultaneous & blind)', () => {
+  it('accepts bids in any order and flips to playing after the 4th bid', () => {
+    let g = createGame(mulberry32(4), 0);
+    // No turn order — bid in an arbitrary sequence.
     g = placeBid(g, 3, 1);
+    g = placeBid(g, 0, 4);
+    g = placeBid(g, 2, 3);
     expect(g.phase).toBe('bidding');
-    g = placeBid(g, 0, 4); // dealer bids last
+    g = placeBid(g, 1, 2); // 4th bid completes bidding
     expect(g.phase).toBe('playing');
     expect(g.bids).toEqual([4, 2, 3, 1]);
     expect(g.turn).toBe(1); // first leader is left of dealer
   });
 
-  it('rejects bidding out of turn', () => {
-    const g = createGame(mulberry32(5), 0); // turn is seat 1
-    expect(() => placeBid(g, 2, 3)).toThrow(RuleViolation);
+  it('rejects a second bid from the same seat', () => {
+    let g = createGame(mulberry32(5), 0);
+    g = placeBid(g, 2, 3);
+    expect(() => placeBid(g, 2, 4)).toThrow(RuleViolation);
   });
 
   it('rejects bids outside 1..8 and non-integers', () => {
@@ -91,7 +92,7 @@ describe('playCard', () => {
       }
     }
     // And a legal card always works.
-    const legal = legalPlays(hand, lead.suit)[0]!;
+    const legal = legalPlays(hand, g.currentTrick)[0]!;
     expect(() => playCard(g, responder, legal)).not.toThrow();
   });
 
@@ -112,8 +113,7 @@ describe('completed-trick hold (the 4th-card fix)', () => {
     let g = bidAllMinimum(createGame(mulberry32(seed), 0));
     for (let i = 0; i < 4; i++) {
       const seat = g.turn;
-      const leadSuit = g.currentTrick.length > 0 ? g.currentTrick[0]!.card.suit : null;
-      g = playCard(g, seat, legalPlays(g.hands[seat]!, leadSuit)[0]!);
+      g = playCard(g, seat, legalPlays(g.hands[seat]!, g.currentTrick)[0]!);
     }
     return g;
   }
@@ -147,7 +147,7 @@ describe('completed-trick hold (the 4th-card fix)', () => {
     let g = bidAllMinimum(createGame(mulberry32(33), 0));
     expect(() => resolveCompletedTrick(g)).toThrow(RuleViolation); // 0 cards
     const seat = g.turn;
-    g = playCard(g, seat, legalPlays(g.hands[seat]!, null)[0]!);
+    g = playCard(g, seat, legalPlays(g.hands[seat]!, g.currentTrick)[0]!);
     expect(() => resolveCompletedTrick(g)).toThrow(RuleViolation); // 1 card
   });
 });

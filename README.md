@@ -48,7 +48,8 @@ npm run typecheck
 ## Locked Callbreak rules (v1)
 
 - Bids **1–8**, no nil. Spades always trump.
-- Relaxed follow-suit: follow the lead suit if you can; otherwise play anything.
+- Full strict follow-suit (no ducking): follow suit and head the trick when able;
+  cut/overcut with a spade when void; discard only when void of lead and spades.
 - Scoring (stored as integer tenths, shown as decimals like `3.2`): made bid =
   `bid + 0.1 × overtricks`; missed = `−bid`.
 - 5 rounds; final ranking uses **shared rank** on ties.

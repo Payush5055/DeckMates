@@ -2,21 +2,25 @@
  * Trick-taking rules: legal-move validation and trick winner resolution.
  *
  * ── Callbreak rules encoded here ────────────────────────────────────────────
- * Follow-suit enforcement (RELAXED variant, chosen for this build):
- *   • When a lead suit is set and the player HOLDS that suit, they must play a
- *     card of the lead suit.
- *   • Otherwise (leading a new trick, or void of the lead suit) any card is
- *     legal — the player is NOT forced to beat the current best card, and is
- *     NOT forced to trump with a spade when void.
+ * Follow-suit enforcement (FULL STRICT variant — no ducking):
+ *   1. Must follow the lead suit if able.
+ *   2. When following, must HEAD the trick if able: play a card that beats the
+ *      current winning card when you hold one (you may choose which winner).
+ *      Once a spade has cut a non-spade lead, a lead-suit card can no longer win,
+ *      so you're free to play any lead-suit card.
+ *   3. If void of the lead suit, must CUT with a spade if you hold one — and if a
+ *      spade has already been played to the trick, must OVERCUT with a higher
+ *      spade when you have one.
+ *   4. Only if void of BOTH the lead suit and spades may you discard freely.
  *
- * Winning a trick (this is independent of the relaxed play rules above):
+ * Winning a trick:
  *   • Spades are ALWAYS trump. If any spade was played, the highest spade wins.
  *   • If no spade was played, the highest card of the LEAD suit wins.
  *   • Off-suit, non-trump cards can never win a trick.
  * ────────────────────────────────────────────────────────────────────────────
  */
 
-import { Card, Seat, Suit, TRUMP_SUIT } from './types';
+import { Card, Seat, TRUMP_SUIT } from './types';
 
 /** One card played into the current trick, tagged with who played it. */
 export interface TrickPlay {
@@ -28,37 +32,68 @@ function handHas(hand: readonly Card[], card: Card): boolean {
   return hand.some((c) => c.suit === card.suit && c.rank === card.rank);
 }
 
+function maxRank(cards: readonly Card[]): number {
+  return cards.reduce((m, c) => (c.rank > m ? c.rank : m), 0);
+}
+
 /**
- * Is `card` a legal play for a player holding `hand`, given the current
- * `leadSuit` (null when this player is leading the trick)?
+ * Is `card` a legal play for a player holding `hand`, given the cards already
+ * played to the current `trick` (empty ⇒ this player is leading)?
  *
- * Relaxed follow-suit: must follow the lead suit only if the hand contains it.
+ * Full strict rules (see the module header) — follow suit, head/overcut when
+ * able, and cut with a spade when void of the lead suit.
  */
 export function isLegalPlay(
   hand: readonly Card[],
-  leadSuit: Suit | null,
+  trick: readonly TrickPlay[],
   card: Card,
 ): boolean {
   // You can only play a card you actually hold.
   if (!handHas(hand, card)) return false;
 
   // Leading a trick: anything in hand is fair game.
-  if (leadSuit === null) return true;
+  if (trick.length === 0) return true;
 
-  // Must follow the lead suit if you hold at least one card of it.
-  const canFollow = hand.some((c) => c.suit === leadSuit);
-  if (canFollow) return card.suit === leadSuit;
+  const leadSuit = trick[0]!.card.suit;
+  const played = trick.map((p) => p.card);
+  const hasLead = hand.some((c) => c.suit === leadSuit);
 
-  // Void of the lead suit: play anything (no forced trump in the relaxed rules).
+  if (hasLead) {
+    // Must follow suit.
+    if (card.suit !== leadSuit) return false;
+    // A lead-suit card can only win if nobody has cut with a spade (unless the
+    // lead suit IS spades, in which case following-suit cards are the trumps).
+    const cut = leadSuit !== TRUMP_SUIT && played.some((c) => c.suit === TRUMP_SUIT);
+    const highestLead = maxRank(played.filter((c) => c.suit === leadSuit));
+    const canHead = !cut && hand.some((c) => c.suit === leadSuit && c.rank > highestLead);
+    // Must head the trick if able; otherwise any lead-suit card is fine.
+    return canHead ? card.rank > highestLead : true;
+  }
+
+  // Void of the lead suit — must cut with a spade if holding one.
+  const hasSpade = hand.some((c) => c.suit === TRUMP_SUIT);
+  if (hasSpade) {
+    if (card.suit !== TRUMP_SUIT) return false;
+    const trickSpades = played.filter((c) => c.suit === TRUMP_SUIT);
+    if (trickSpades.length > 0) {
+      // A spade already cut — must overcut with a higher spade if able.
+      const highestSpade = maxRank(trickSpades);
+      const canOvercut = hand.some((c) => c.suit === TRUMP_SUIT && c.rank > highestSpade);
+      return canOvercut ? card.rank > highestSpade : true;
+    }
+    return true; // first to cut — any spade
+  }
+
+  // Void of both the lead suit and spades — discard anything.
   return true;
 }
 
 /**
- * List the legal plays from `hand` for the given `leadSuit`. Useful for UI
+ * List the legal plays from `hand` given the current `trick`. Useful for UI
  * (which cards to enable) and for bots / tests.
  */
-export function legalPlays(hand: readonly Card[], leadSuit: Suit | null): Card[] {
-  return hand.filter((c) => isLegalPlay(hand, leadSuit, c));
+export function legalPlays(hand: readonly Card[], trick: readonly TrickPlay[]): Card[] {
+  return hand.filter((c) => isLegalPlay(hand, trick, c));
 }
 
 /**

@@ -44,9 +44,10 @@ export function MatchEndPanel({
                 }`}
               >
                 <span className="tabular w-10 text-lg font-semibold text-gold">{ordinal(s.rank)}</span>
-                <span className="h-6 w-6 rounded-full ring-1 ring-black/30" style={{ backgroundColor: color }} />
-                <span className="flex-1 text-ink">
-                  {isYou ? 'You' : 'Player'}
+                <span className="h-6 w-6 shrink-0 rounded-full ring-1 ring-black/30" style={{ backgroundColor: color }} />
+                <span className="flex-1 truncate text-ink" title={s.name}>
+                  {s.isBot ? 'Bot' : s.name}
+                  {isYou && <span className="ml-1 text-xs text-muted">(you)</span>}
                   {isWinner && <span className="ml-2 text-sm text-gold">👑 Winner</span>}
                 </span>
                 <span className="tabular text-xl font-semibold text-ink">{formatTenths(s.totalTenths)}</span>

@@ -24,6 +24,7 @@ import {
 import {
   ClientEvents,
   ServerEvents,
+  type CreateRoomReq,
   type CreateRoomRes,
   type FinalStanding,
   type GameOverPayload,
@@ -38,10 +39,16 @@ import {
 import { config } from './config';
 import { generateUniqueRoomCode } from './codes';
 import { avatarForSeat } from './avatars';
+import { chooseBid, chooseCard } from './botAI';
 import { buildPublicRoomState, buildSelfState } from './redact';
 import { Room, RoomPlayer } from './room';
 import { MatchHistoryStore } from './persistence';
 import { log } from './logger';
+
+/** Bots act after a short, human-like pause (spec: 800–1500ms). */
+function botDelayMs(): number {
+  return 800 + Math.floor(Math.random() * 700);
+}
 
 /**
  * Fields on each socket. `userId`/`username` are set by the auth middleware
@@ -66,8 +73,8 @@ export class GameServer {
 
   /** Attach handlers for a freshly connected socket. */
   register(socket: Socket): void {
-    socket.on(ClientEvents.CreateRoom, (ack: Ack<CreateRoomRes>) =>
-      this.guard(() => this.onCreateRoom(socket, ack), () => ack?.({ ok: false, error: 'Server error' })),
+    socket.on(ClientEvents.CreateRoom, (req: CreateRoomReq, ack: Ack<CreateRoomRes>) =>
+      this.guard(() => this.onCreateRoom(socket, req, ack), () => ack?.({ ok: false, error: 'Server error' })),
     );
     socket.on(ClientEvents.JoinRoom, (req: JoinRoomReq, ack: Ack<JoinRoomRes>) =>
       this.guard(() => this.onJoinRoom(socket, req, ack), () => ack?.({ ok: false, error: 'Server error' })),
@@ -100,13 +107,21 @@ export class GameServer {
 
   /* ── Handlers ───────────────────────────────────────────────────────────── */
 
-  private onCreateRoom(socket: Socket, ack: Ack<CreateRoomRes>): void {
+  private onCreateRoom(socket: Socket, req: CreateRoomReq, ack: Ack<CreateRoomRes>): void {
     const identity = this.identityOf(socket);
     if (!identity) return ack?.({ ok: false, error: 'Not authenticated' });
     const { userId, username } = identity;
 
     const code = generateUniqueRoomCode((c) => this.rooms.has(c));
     const room = new Room(code, userId);
+    // 'bots' → start with just the host (1 real). 'teammates' → wait for
+    // 1 + teammates real players before filling remaining seats with bots.
+    if (req?.mode === 'bots') {
+      room.expectedRealPlayers = 1;
+    } else {
+      const teammates = Math.max(1, Math.min(3, Number(req?.teammates) || 3));
+      room.expectedRealPlayers = 1 + teammates;
+    }
     this.rooms.set(code, room);
 
     const seat: Seat = 0;
@@ -116,14 +131,18 @@ export class GameServer {
       seat,
       avatar: avatarForSeat(seat),
       connected: true,
+      isBot: false,
       socketId: socket.id,
       disconnectTimer: null,
     });
     this.bindSocket(socket, code);
 
-    log.info(`Room ${code} created by ${username} (${userId})`);
+    log.info(`Room ${code} created by ${username} (expects ${room.expectedRealPlayers} real)`);
     ack?.({ ok: true, roomCode: code });
+    // 'bots' mode is ready immediately → fills bots and starts here.
+    this.maybeStart(room);
     this.broadcastRoom(room);
+    this.driveBots(room);
   }
 
   private onJoinRoom(socket: Socket, req: JoinRoomReq, ack: Ack<JoinRoomRes>): void {
@@ -148,8 +167,9 @@ export class GameServer {
       this.bindSocket(socket, roomCode);
       ack?.({ ok: true, seat: existing.seat });
       log.info(`Player ${username} reconnected to ${roomCode} (seat ${existing.seat})`);
-      this.startIfReady(room);
+      this.maybeStart(room);
       this.broadcastRoom(room);
+      this.driveBots(room);
       return;
     }
 
@@ -164,6 +184,7 @@ export class GameServer {
       seat,
       avatar: avatarForSeat(seat),
       connected: true,
+      isBot: false,
       socketId: socket.id,
       disconnectTimer: null,
     });
@@ -171,9 +192,10 @@ export class GameServer {
     ack?.({ ok: true, seat });
     log.info(`Player ${username} joined ${roomCode} (seat ${seat})`);
 
-    // Auto-start once the table is full and everyone is connected.
-    this.startIfReady(room);
+    // Start once enough real players are present (filling empty seats with bots).
+    this.maybeStart(room);
     this.broadcastRoom(room);
+    this.driveBots(room);
   }
 
   private onPlaceBid(socket: Socket, req: PlaceBidReq): void {
@@ -187,6 +209,9 @@ export class GameServer {
       return this.emitRuleError(socket, err);
     }
     this.broadcastRoom(room);
+    // A human bid may have completed bidding (→ playing) or still leaves bot
+    // bids/plays pending.
+    this.driveBots(room);
   }
 
   private onPlayCard(socket: Socket, req: PlayCardReq): void {
@@ -208,6 +233,9 @@ export class GameServer {
 
     if (room.game.currentTrick.length === NUM_PLAYERS) {
       this.scheduleTrickResolution(room);
+    } else {
+      // Next seat may be a bot.
+      this.driveBots(room);
     }
   }
 
@@ -235,6 +263,9 @@ export class GameServer {
         this.handleGameOver(room);
       } else if (room.game.phase === 'roundEnd') {
         this.scheduleNextRound(room);
+      } else {
+        // Next trick — its leader may be a bot.
+        this.driveBots(room);
       }
     }, config.trickHoldMs);
   }
@@ -251,7 +282,10 @@ export class GameServer {
     if (!ctx) return ack?.({ ok: false, error: 'Not in a room' });
     const { room } = ctx;
 
-    const survivors = room.connectedPlayers().sort((a, b) => a.seat - b.seat);
+    // Only real players carry over; bots are re-created in the new room.
+    const survivors = room.players
+      .filter((p) => !p.isBot && p.connected)
+      .sort((a, b) => a.seat - b.seat);
     if (survivors.length === 0) return ack?.({ ok: false, error: 'No players to continue' });
 
     const newCode = generateUniqueRoomCode((c) => this.rooms.has(c));
@@ -259,6 +293,8 @@ export class GameServer {
     const host =
       survivors.find((p) => p.playerId === room.hostPlayerId)?.playerId ?? survivors[0]!.playerId;
     const newRoom = new Room(newCode, host);
+    // Wait for exactly the returning real players; bots backfill the rest.
+    newRoom.expectedRealPlayers = survivors.length;
 
     // Pre-seat the survivors (disconnected until their client rejoins the new room).
     survivors.forEach((p, i) => {
@@ -269,6 +305,7 @@ export class GameServer {
         seat,
         avatar: avatarForSeat(seat),
         connected: false,
+        isBot: false,
         socketId: null,
         disconnectTimer: null,
       });
@@ -308,12 +345,30 @@ export class GameServer {
 
   /* ── Lifecycle helpers ──────────────────────────────────────────────────── */
 
-  /** Deal and begin the match when the table is full and everyone's present. */
-  private startIfReady(room: Room): void {
-    if (!room.isReadyToStart()) return;
-    // Host (seat 0) deals the first round; the engine rotates thereafter.
+  /**
+   * Begin the match once enough real players are present: fill any empty seats
+   * with bots, then deal. Host (seat 0) deals the first round; the engine
+   * rotates thereafter.
+   */
+  private maybeStart(room: Room): void {
+    if (!room.readyToStart()) return;
+    let seat = room.nextFreeSeat();
+    while (seat !== null) {
+      room.players.push({
+        playerId: `bot-${seat}`,
+        name: 'Bot',
+        seat,
+        avatar: avatarForSeat(seat),
+        connected: true,
+        isBot: true,
+        socketId: null,
+        disconnectTimer: null,
+      });
+      seat = room.nextFreeSeat();
+    }
     room.game = createGame(Math.random, 0);
-    log.info(`Room ${room.code} is full — starting match`);
+    const bots = room.players.filter((p) => p.isBot).length;
+    log.info(`Room ${room.code} starting — ${NUM_PLAYERS - bots} real + ${bots} bots`);
   }
 
   private scheduleNextRound(room: Room): void {
@@ -323,7 +378,78 @@ export class GameServer {
       if (!room.game || room.game.phase !== 'roundEnd') return;
       room.game = startNextRound(room.game, Math.random);
       this.broadcastRoom(room);
+      // New round of blind bidding — schedule the bots' bids.
+      this.driveBots(room);
     }, config.roundEndDelayMs);
+  }
+
+  /* ── Bots ───────────────────────────────────────────────────────────────── */
+
+  /**
+   * Schedule any pending bot actions for the current state. Idempotent: a seat
+   * with an in-flight timer is skipped, so this is safe to call after every
+   * state change.
+   */
+  private driveBots(room: Room): void {
+    const game = room.game;
+    if (!game) return;
+
+    if (game.phase === 'bidding') {
+      for (const p of room.players) {
+        if (p.isBot && game.bids[p.seat] === null && !room.botTimers.has(p.seat)) {
+          this.scheduleBotBid(room, p.seat);
+        }
+      }
+    } else if (game.phase === 'playing' && game.currentTrick.length < NUM_PLAYERS) {
+      const seat = game.turn;
+      const player = room.playerBySeat(seat);
+      if (player?.isBot && !room.botTimers.has(seat)) {
+        this.scheduleBotPlay(room, seat);
+      }
+    }
+  }
+
+  private scheduleBotBid(room: Room, seat: Seat): void {
+    const timer = setTimeout(() => {
+      room.botTimers.delete(seat);
+      const game = room.game;
+      if (!game || game.phase !== 'bidding' || game.bids[seat] !== null) return;
+      try {
+        room.game = placeBid(game, seat, chooseBid(game.hands[seat]!));
+      } catch (err) {
+        return log.error(`Bot bid failed (seat ${seat})`, err);
+      }
+      this.broadcastRoom(room);
+      this.driveBots(room);
+    }, botDelayMs());
+    room.botTimers.set(seat, timer);
+  }
+
+  private scheduleBotPlay(room: Room, seat: Seat): void {
+    const timer = setTimeout(() => {
+      room.botTimers.delete(seat);
+      const game = room.game;
+      if (
+        !game ||
+        game.phase !== 'playing' ||
+        game.turn !== seat ||
+        game.currentTrick.length >= NUM_PLAYERS
+      ) {
+        return;
+      }
+      try {
+        room.game = playCard(game, seat, chooseCard(game, seat));
+      } catch (err) {
+        return log.error(`Bot play failed (seat ${seat})`, err);
+      }
+      this.broadcastRoom(room);
+      if (room.game.currentTrick.length === NUM_PLAYERS) {
+        this.scheduleTrickResolution(room);
+      } else {
+        this.driveBots(room);
+      }
+    }, botDelayMs());
+    room.botTimers.set(seat, timer);
   }
 
   private handleGameOver(room: Room): void {
@@ -361,6 +487,7 @@ export class GameServer {
         seat: r.seat,
         playerId: player?.playerId ?? '',
         name: player?.name ?? `Seat ${r.seat}`,
+        isBot: player?.isBot ?? false,
         totalTenths: r.totalTenths,
         rank: r.rank,
       };
@@ -380,6 +507,7 @@ export class GameServer {
     r: { bids: readonly number[]; tricksWon: readonly number[]; scoreTenths: readonly number[]; cumulativeTenths: readonly number[] },
   ): RoundResultPayload {
     const playerNames = [0, 1, 2, 3].map((seat) => room.playerBySeat(seat as Seat)?.name ?? `Seat ${seat}`);
+    const isBot = [0, 1, 2, 3].map((seat) => room.playerBySeat(seat as Seat)?.isBot ?? false);
     return {
       roundNumber,
       bids: [...r.bids],
@@ -387,6 +515,7 @@ export class GameServer {
       scoreTenths: [...r.scoreTenths],
       cumulativeTenths: [...r.cumulativeTenths],
       playerNames,
+      isBot,
     };
   }
 
@@ -398,7 +527,8 @@ export class GameServer {
     }
     room.players = room.players.filter((p) => p !== player);
 
-    if (room.players.length === 0) {
+    // With no real players left, the room (bots only) is pointless — retire it.
+    if (room.players.every((p) => p.isBot)) {
       this.destroyRoom(room);
       return;
     }
@@ -421,6 +551,8 @@ export class GameServer {
   private destroyRoom(room: Room): void {
     if (room.roundEndTimer) clearTimeout(room.roundEndTimer);
     if (room.trickHoldTimer) clearTimeout(room.trickHoldTimer);
+    for (const t of room.botTimers.values()) clearTimeout(t);
+    room.botTimers.clear();
     for (const p of room.players) {
       if (p.disconnectTimer) clearTimeout(p.disconnectTimer);
     }

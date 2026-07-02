@@ -9,7 +9,7 @@ import type { RoundResultPayload, Seat } from '@cardadda/shared';
 /**
  * Between-round results. Scores are public — everyone sees everyone's bid,
  * tricks won, points this round (decimal, e.g. "3.2"), and running total.
- * Players are identified by their seat color + a "You" marker, never names.
+ * Players are shown by seat color + username (or "Bot"), with a "you" marker.
  */
 export function RoundCompletePanel({
   result,
@@ -42,8 +42,11 @@ export function RoundCompletePanel({
             return (
               <div key={seat} className="contents">
                 <div className="flex items-center gap-2 text-left">
-                  <span className="h-4 w-4 rounded-full ring-1 ring-black/30" style={{ backgroundColor: color }} />
-                  <span className="text-ink">{seat === youSeat ? 'You' : 'Player'}</span>
+                  <span className="h-4 w-4 shrink-0 rounded-full ring-1 ring-black/30" style={{ backgroundColor: color }} />
+                  <span className="truncate text-ink" title={result.playerNames[seat]}>
+                    {result.isBot[seat] ? 'Bot' : result.playerNames[seat]}
+                    {seat === youSeat && <span className="ml-1 text-xs text-muted">(you)</span>}
+                  </span>
                 </div>
                 <span className="tabular text-ink">{result.bids[seat]}</span>
                 <span className="tabular text-ink">{result.tricksWon[seat]}</span>

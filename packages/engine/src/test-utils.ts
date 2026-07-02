@@ -22,11 +22,13 @@ export function mulberry32(seed: number): RNG {
   };
 }
 
-/** Drive the bidding phase to completion: every seat bids the minimum. */
+/** Drive the (simultaneous) bidding phase to completion: every seat bids min. */
 export function bidAllMinimum(state: GameState): GameState {
   let s = state;
-  while (s.phase === 'bidding') {
-    s = placeBid(s, s.turn, MIN_BID);
+  for (const seat of [0, 1, 2, 3] as Seat[]) {
+    if (s.phase === 'bidding' && s.bids[seat] === null) {
+      s = placeBid(s, seat, MIN_BID);
+    }
   }
   return s;
 }
@@ -44,8 +46,7 @@ export function autoPlayRound(state: GameState): GameState {
       continue;
     }
     const seat = s.turn as Seat;
-    const leadSuit = s.currentTrick.length > 0 ? s.currentTrick[0]!.card.suit : null;
-    const options = legalPlays(s.hands[seat]!, leadSuit);
+    const options = legalPlays(s.hands[seat]!, s.currentTrick);
     s = playCard(s, seat, options[0]!);
   }
   return s;

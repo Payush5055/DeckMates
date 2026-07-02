@@ -8,6 +8,8 @@ export interface RoomPlayer {
   seat: Seat;
   avatar: string;
   connected: boolean;
+  /** Server-controlled bot seat (no socket; the server drives its actions). */
+  isBot: boolean;
   /** Current socket id, or null while disconnected (within the grace window). */
   socketId: string | null;
   /** Pending removal timer for a dropped player; cleared on reconnect. */
@@ -28,11 +30,24 @@ export class Room {
   roundEndTimer: NodeJS.Timeout | null = null;
   /** Timer holding a completed trick face-up before it resolves. */
   trickHoldTimer: NodeJS.Timeout | null = null;
+  /** Pending bot-action timers, keyed by seat. */
+  botTimers = new Map<Seat, NodeJS.Timeout>();
+  /**
+   * How many REAL (non-bot) players must be seated before the match starts. Any
+   * still-empty seats at that point are filled with bots. 'bots' mode = 1 (just
+   * the host); 'teammates' mode = 1 + teammates.
+   */
+  expectedRealPlayers = NUM_PLAYERS;
   readonly createdAt = Date.now();
 
   constructor(code: string, hostPlayerId: string) {
     this.code = code;
     this.hostPlayerId = hostPlayerId;
+  }
+
+  /** Count of currently-connected real (non-bot) players. */
+  realConnectedCount(): number {
+    return this.players.filter((p) => !p.isBot && p.connected).length;
   }
 
   /** 'waiting' until a game exists, then mirrors the engine phase. */
@@ -68,12 +83,11 @@ export class Room {
     return null;
   }
 
-  /** True when all four seats are taken AND everyone is currently connected. */
-  isReadyToStart(): boolean {
-    return (
-      !this.game &&
-      this.players.length === NUM_PLAYERS &&
-      this.players.every((p) => p.connected)
-    );
+  /**
+   * True when the match should begin: no game yet and enough real players are
+   * present. Any empty seats are filled with bots by the server at this point.
+   */
+  readyToStart(): boolean {
+    return !this.game && this.realConnectedCount() >= this.expectedRealPlayers;
   }
 }
