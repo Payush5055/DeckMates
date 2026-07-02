@@ -3,9 +3,9 @@
  */
 
 import { RNG } from './deck';
-import { GameState, playCard, placeBid, startNextRound } from './game';
+import { GameState, playCard, placeBid, resolveCompletedTrick, startNextRound } from './game';
 import { legalPlays } from './trick';
-import { MIN_BID, Seat } from './types';
+import { MIN_BID, NUM_PLAYERS, Seat } from './types';
 
 /**
  * mulberry32 — a tiny, fast, deterministic PRNG. Seeded so every test run deals
@@ -38,6 +38,11 @@ export function bidAllMinimum(state: GameState): GameState {
 export function autoPlayRound(state: GameState): GameState {
   let s = state;
   while (s.phase === 'playing') {
+    // A full trick parks in the "all 4 visible" hold state; resolve it to move on.
+    if (s.currentTrick.length === NUM_PLAYERS) {
+      s = resolveCompletedTrick(s);
+      continue;
+    }
     const seat = s.turn as Seat;
     const leadSuit = s.currentTrick.length > 0 ? s.currentTrick[0]!.card.suit : null;
     const options = legalPlays(s.hands[seat]!, leadSuit);

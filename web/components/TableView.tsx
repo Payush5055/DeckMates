@@ -122,11 +122,9 @@ export function TableView({ code }: { code: string }) {
 
   return (
     <div className="mx-auto flex min-h-screen max-w-4xl flex-col px-3 pb-6">
-      {/* Header — no scores here, keeping trick-play focused on the table. */}
-      <header className="flex items-center justify-between py-3">
-        <Link href="/" className="font-serif text-lg text-gold">
-          DeckMates
-        </Link>
+      {/* Table toolbar — branding lives in the global header; no scores here,
+          keeping trick-play focused on the table. */}
+      <header className="flex items-center justify-end py-1">
         <div className="flex items-center gap-3 text-sm text-muted">
           {room.phase !== 'waiting' && (
             <span className="tabular">

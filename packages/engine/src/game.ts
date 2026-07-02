@@ -123,11 +123,19 @@ export function placeBid(state: GameState, seat: Seat, bid: number): GameState {
 
 /**
  * Play `card` from `seat` into the current trick. Enforces turn order and the
- * relaxed follow-suit rule. When the fourth card lands, resolves the trick,
- * awards it, and either continues, ends the round (scoring it), or ends the game.
+ * relaxed follow-suit rule.
+ *
+ * IMPORTANT: when the fourth card lands, the trick is NOT resolved here. The
+ * returned state keeps all 4 cards face-up in `currentTrick` so the transport
+ * layer can broadcast (and briefly hold) the completed trick for players to
+ * see. Resolution — picking the winner, awarding the trick, ending the round —
+ * happens in the separate `resolveCompletedTrick()` step.
  */
 export function playCard(state: GameState, seat: Seat, card: Card): GameState {
   if (state.phase !== 'playing') throw new RuleViolation('Not in the playing phase');
+  if (state.currentTrick.length >= NUM_PLAYERS) {
+    throw new RuleViolation('The trick is being resolved');
+  }
   if (seat !== state.turn) throw new RuleViolation('It is not your turn to play');
 
   const leadSuit = state.currentTrick.length > 0 ? state.currentTrick[0]!.card.suit : null;
@@ -150,17 +158,32 @@ export function playCard(state: GameState, seat: Seat, card: Card): GameState {
     return { ...state, hands, currentTrick, turn: nextSeat(seat) };
   }
 
-  // Trick complete: award it to the winner.
-  const winner = resolveTrick(currentTrick);
+  // Trick complete: leave all 4 cards visible and freeze the turn. Nobody can
+  // act until resolveCompletedTrick() runs (guarded at the top of this fn).
+  return { ...state, hands, currentTrick };
+}
+
+/**
+ * Resolve a COMPLETED trick (all 4 cards played): award it to the winner, clear
+ * the pile, and either continue (winner leads), end the round (scoring it), or
+ * end the game. Called by the server after it has broadcast — and deliberately
+ * held — the all-4-cards-visible state produced by the final `playCard`.
+ */
+export function resolveCompletedTrick(state: GameState): GameState {
+  if (state.phase !== 'playing') throw new RuleViolation('Not in the playing phase');
+  if (state.currentTrick.length !== NUM_PLAYERS) {
+    throw new RuleViolation('The trick is not complete yet');
+  }
+
+  const winner = resolveTrick(state.currentTrick);
   const tricksWon = state.tricksWon.slice();
   tricksWon[winner] += 1;
 
-  const roundOver = hands.every((h) => h.length === 0);
+  const roundOver = state.hands.every((h) => h.length === 0);
   if (!roundOver) {
     // Winner leads the next trick.
     return {
       ...state,
-      hands,
       currentTrick: [],
       tricksWon,
       leadSeat: winner,
@@ -183,7 +206,6 @@ export function playCard(state: GameState, seat: Seat, card: Card): GameState {
   const gameOver = state.roundNumber >= TOTAL_ROUNDS;
   return {
     ...state,
-    hands, // all empty now
     currentTrick: [],
     tricksWon,
     scores,

@@ -21,15 +21,7 @@ const GAMES: GameCard[] = [
 export default function HomePage() {
   return (
     <main className="mx-auto max-w-5xl px-4 pb-16">
-      {/* Top bar */}
-      <nav className="flex items-center justify-between py-5">
-        <span className="font-serif text-2xl text-gold">DeckMates</span>
-        <Link href="/history" className="text-sm text-muted hover:text-ink">
-          Match history
-        </Link>
-      </nav>
-
-      {/* Hero */}
+      {/* Hero (global header + sign-in state come from the root layout) */}
       <section className="relative overflow-hidden rounded-3xl bg-surface px-8 py-16 shadow-table ring-1 ring-gold/20">
         <span className="pointer-events-none absolute -right-6 top-1/2 -translate-y-1/2 select-none text-[16rem] leading-none text-black/15" aria-hidden>
           ♠
@@ -40,7 +32,7 @@ export default function HomePage() {
             Gather your mates.<br />Deal the cards.
           </h1>
           <p className="mt-4 text-muted">
-            Real-time Callbreak for four. No sign-up — just a name, a room code, and a seat at the felt.
+            Real-time Callbreak for four. Sign in, share a room code, and take your seat at the felt.
           </p>
           <Link
             href="/game/callbreak"

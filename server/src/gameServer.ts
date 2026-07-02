@@ -11,12 +11,14 @@
 import type { Server, Socket } from 'socket.io';
 import {
   Card,
+  NUM_PLAYERS,
   RuleViolation,
   Seat,
   createGame,
   placeBid,
   playCard,
   rankSeats,
+  resolveCompletedTrick,
   startNextRound,
 } from '@cardadda/engine';
 import {
@@ -194,26 +196,47 @@ export class GameServer {
     if (!room.game) return this.emitError(socket, 'The game has not started yet');
 
     const card = req?.card as Card;
-    const prevHistoryLen = room.game.history.length;
     try {
       room.game = playCard(room.game, player.seat, card);
     } catch (err) {
       return this.emitRuleError(socket, err);
     }
 
-    const game = room.game;
+    // Broadcast first, so when this was the 4th card every client SEES the
+    // completed trick (all 4 cards face-up) before it resolves.
     this.broadcastRoom(room);
 
-    // A completed round appended a history entry — surface the round result.
-    if (game.history.length > prevHistoryLen) {
-      this.emitRoundResult(room);
+    if (room.game.currentTrick.length === NUM_PLAYERS) {
+      this.scheduleTrickResolution(room);
     }
+  }
 
-    if (game.phase === 'gameOver') {
-      this.handleGameOver(room);
-    } else if (game.phase === 'roundEnd') {
-      this.scheduleNextRound(room);
-    }
+  /**
+   * The 4th-card fix: hold the completed trick face-up for `trickHoldMs`, then
+   * resolve it (award the winner, clear the pile) and broadcast the new state.
+   * The engine freezes play during the hold, so no input can slip through.
+   */
+  private scheduleTrickResolution(room: Room): void {
+    if (room.trickHoldTimer) clearTimeout(room.trickHoldTimer);
+    room.trickHoldTimer = setTimeout(() => {
+      room.trickHoldTimer = null;
+      const game = room.game;
+      if (!game || game.phase !== 'playing' || game.currentTrick.length !== NUM_PLAYERS) return;
+
+      const prevHistoryLen = game.history.length;
+      room.game = resolveCompletedTrick(game);
+      this.broadcastRoom(room);
+
+      // A completed round appended a history entry — surface the round result.
+      if (room.game.history.length > prevHistoryLen) {
+        this.emitRoundResult(room);
+      }
+      if (room.game.phase === 'gameOver') {
+        this.handleGameOver(room);
+      } else if (room.game.phase === 'roundEnd') {
+        this.scheduleNextRound(room);
+      }
+    }, config.trickHoldMs);
   }
 
   private onLeaveRoom(socket: Socket): void {
@@ -397,6 +420,7 @@ export class GameServer {
 
   private destroyRoom(room: Room): void {
     if (room.roundEndTimer) clearTimeout(room.roundEndTimer);
+    if (room.trickHoldTimer) clearTimeout(room.trickHoldTimer);
     for (const p of room.players) {
       if (p.disconnectTimer) clearTimeout(p.disconnectTimer);
     }

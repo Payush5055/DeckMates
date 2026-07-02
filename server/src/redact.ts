@@ -9,7 +9,7 @@
  * The server sends each socket `{ room: <public>, self: <their own> }`.
  */
 
-import { TOTAL_ROUNDS, legalPlays } from '@cardadda/engine';
+import { NUM_PLAYERS, TOTAL_ROUNDS, legalPlays } from '@cardadda/engine';
 import type {
   PublicPlayer,
   PublicRoomState,
@@ -34,7 +34,10 @@ export function buildPublicRoomState(room: Room): PublicRoomState {
       tricksWon: game ? game.tricksWon[p.seat]! : 0,
     }));
 
-  const onClock = game && (game.phase === 'bidding' || game.phase === 'playing');
+  // Nobody is "on the clock" while a completed trick is held face-up.
+  const trickHeld = game !== null && game.currentTrick.length >= NUM_PLAYERS;
+  const onClock =
+    game && (game.phase === 'bidding' || game.phase === 'playing') && !trickHeld;
 
   return {
     roomCode: room.code,
@@ -58,9 +61,15 @@ export function buildSelfState(room: Room, player: RoomPlayer): SelfState {
   const game = room.game;
   const hand = game ? game.hands[player.seat]!.slice() : [];
 
-  // Offer legal moves only when it is genuinely this player's turn to play.
+  // Offer legal moves only when it is genuinely this player's turn to play
+  // (never while a completed trick is held face-up awaiting resolution).
   let legal: SelfState['legalPlays'] = [];
-  if (game && game.phase === 'playing' && game.turn === player.seat) {
+  if (
+    game &&
+    game.phase === 'playing' &&
+    game.turn === player.seat &&
+    game.currentTrick.length < NUM_PLAYERS
+  ) {
     const leadSuit = game.currentTrick.length > 0 ? game.currentTrick[0]!.card.suit : null;
     legal = legalPlays(hand, leadSuit);
   }

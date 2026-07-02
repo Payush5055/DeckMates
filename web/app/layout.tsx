@@ -3,6 +3,7 @@ import { DM_Sans, IBM_Plex_Mono, Playfair_Display } from 'next/font/google';
 import './globals.css';
 import { AuthProvider } from '@/lib/authContext';
 import { TableProvider } from '@/lib/socketContext';
+import { SiteHeader } from '@/components/SiteHeader';
 
 // Characterful serif for headings.
 const serif = Playfair_Display({
@@ -36,7 +37,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" className={`${serif.variable} ${sans.variable} ${mono.variable}`}>
       <body className="min-h-screen bg-felt text-ink">
         <AuthProvider>
-          <TableProvider>{children}</TableProvider>
+          <TableProvider>
+            <SiteHeader />
+            {children}
+          </TableProvider>
         </AuthProvider>
       </body>
     </html>

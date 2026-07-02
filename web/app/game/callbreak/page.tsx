@@ -1,8 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import Link from 'next/link';
 import { useTable } from '@/lib/socketContext';
 import { useAuth } from '@/lib/authContext';
 import { sound } from '@/lib/audio';
@@ -22,20 +21,24 @@ const RULES = [
 export default function CallbreakDetailPage() {
   const router = useRouter();
   const { createRoom, joinRoom } = useTable();
-  const { ready, user, needsUsername, signOut } = useAuth();
+  const { ready, user, needsUsername } = useAuth();
   const [joinCode, setJoinCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Auth guard: joining a table requires being signed in with a username.
-  useEffect(() => {
-    if (ready && (!user || needsUsername)) {
-      router.replace(`/login?next=${encodeURIComponent('/game/callbreak')}`);
+  // Browsing this page is public; only ACTING (create/join) requires sign-in.
+  // Returns false after redirecting a signed-out player to /login?next=….
+  function requireSignIn(): boolean {
+    if (!ready) return false;
+    if (!user || needsUsername) {
+      router.push(`/login?next=${encodeURIComponent('/game/callbreak')}`);
+      return false;
     }
-  }, [ready, user, needsUsername, router]);
+    return true;
+  }
 
   async function handleCreate() {
-    if (busy) return;
+    if (busy || !requireSignIn()) return;
     setBusy(true);
     setError(null);
     sound.init(); // unlock audio on first gesture
@@ -49,7 +52,7 @@ export default function CallbreakDetailPage() {
   }
 
   async function handleJoin() {
-    if (busy) return;
+    if (busy || !requireSignIn()) return;
     const code = joinCode.trim().toUpperCase();
     if (code.length < 4) {
       setError('Enter a room code');
@@ -74,32 +77,12 @@ export default function CallbreakDetailPage() {
     router.push(`/table/${code}`);
   }
 
-  if (!ready || !user || needsUsername) {
-    return (
-      <main className="flex min-h-screen items-center justify-center text-muted">Loading…</main>
-    );
-  }
-
+  // This page is PUBLIC — rules and description render for everyone. Sign-in
+  // state lives in the global header; creating/joining redirects via
+  // requireSignIn() when signed out.
   return (
     <main className="mx-auto max-w-3xl px-4 pb-16">
-      <nav className="flex items-center justify-between py-5">
-        <Link href="/" className="font-serif text-xl text-gold">
-          DeckMates
-        </Link>
-        <div className="flex items-center gap-4 text-sm text-muted">
-          <span>
-            Signed in as <span className="text-ink">{user.username}</span>
-          </span>
-          <button onClick={() => void signOut()} className="hover:text-ink">
-            Sign out
-          </button>
-          <Link href="/history" className="hover:text-ink">
-            History
-          </Link>
-        </div>
-      </nav>
-
-      <header className="rounded-3xl bg-surface px-8 py-10 shadow-table ring-1 ring-gold/20">
+      <header className="mt-2 rounded-3xl bg-surface px-8 py-10 shadow-table ring-1 ring-gold/20">
         <h1 className="font-serif text-4xl text-ink">Callbreak</h1>
         <p className="mt-2 text-muted">A four-player trick-taking classic. Bid boldly, break with spades.</p>
       </header>

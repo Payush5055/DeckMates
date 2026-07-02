@@ -8,7 +8,7 @@
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "DEV_AUTH=1 vitest run"
+    "test": "DEV_AUTH=1 TRICK_HOLD_MS=80 vitest run"
   },
   "dependencies": {
     "@cardadda/engine": "*",

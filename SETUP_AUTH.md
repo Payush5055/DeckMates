@@ -64,7 +64,7 @@ DEV_AUTH=0
 
 Restart both servers. The `/login` page now shows **Continue with Google**; on
 first sign-in you'll pick a unique username (stored in `profiles`), then you can
-create/join tables. `/history` and match records key off the Supabase user id.
+create/join tables. `/account` (match history) keys off the Supabase user id.
 
 ## How identity is verified (for reference)
 

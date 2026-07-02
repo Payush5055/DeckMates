@@ -26,6 +26,8 @@ export class Room {
   game: GameState | null = null;
   /** Timer bridging roundEnd → next deal. */
   roundEndTimer: NodeJS.Timeout | null = null;
+  /** Timer holding a completed trick face-up before it resolves. */
+  trickHoldTimer: NodeJS.Timeout | null = null;
   readonly createdAt = Date.now();
 
   constructor(code: string, hostPlayerId: string) {

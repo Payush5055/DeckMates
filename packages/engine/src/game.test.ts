@@ -5,6 +5,7 @@ import {
   createGame,
   placeBid,
   playCard,
+  resolveCompletedTrick,
   startNextRound,
 } from './game';
 import { legalPlays } from './trick';
@@ -102,6 +103,52 @@ describe('playCard', () => {
     expect(after.hands[leader]).toHaveLength(12);
     expect(after.hands[leader]!.some((c) => cardId(c) === cardId(card))).toBe(false);
     expect(after.currentTrick).toHaveLength(1);
+  });
+});
+
+describe('completed-trick hold (the 4th-card fix)', () => {
+  /** Play exactly one full trick (4 cards) and return the held state. */
+  function playOneFullTrick(seed: number): GameState {
+    let g = bidAllMinimum(createGame(mulberry32(seed), 0));
+    for (let i = 0; i < 4; i++) {
+      const seat = g.turn;
+      const leadSuit = g.currentTrick.length > 0 ? g.currentTrick[0]!.card.suit : null;
+      g = playCard(g, seat, legalPlays(g.hands[seat]!, leadSuit)[0]!);
+    }
+    return g;
+  }
+
+  it('the 4th card stays visible: playCard leaves all 4 cards in currentTrick', () => {
+    const g = playOneFullTrick(30);
+    expect(g.phase).toBe('playing');
+    expect(g.currentTrick).toHaveLength(4); // all 4 face-up, NOT cleared
+    expect(g.tricksWon).toEqual([0, 0, 0, 0]); // not awarded yet
+  });
+
+  it('no seat may play while the completed trick is held', () => {
+    const g = playOneFullTrick(31);
+    for (const seat of [0, 1, 2, 3] as const) {
+      const card = g.hands[seat]![0];
+      if (card) expect(() => playCard(g, seat, card)).toThrow(RuleViolation);
+    }
+  });
+
+  it('resolveCompletedTrick awards the winner and clears the pile', () => {
+    const g = playOneFullTrick(32);
+    const resolved = resolveCompletedTrick(g);
+    expect(resolved.currentTrick).toHaveLength(0);
+    expect(resolved.tricksWon.reduce((a, b) => a + b, 0)).toBe(1);
+    const winner = resolved.tricksWon.findIndex((t) => t === 1);
+    expect(resolved.turn).toBe(winner); // winner leads the next trick
+    expect(resolved.leadSeat).toBe(winner);
+  });
+
+  it('resolveCompletedTrick rejects an incomplete trick', () => {
+    let g = bidAllMinimum(createGame(mulberry32(33), 0));
+    expect(() => resolveCompletedTrick(g)).toThrow(RuleViolation); // 0 cards
+    const seat = g.turn;
+    g = playCard(g, seat, legalPlays(g.hands[seat]!, null)[0]!);
+    expect(() => resolveCompletedTrick(g)).toThrow(RuleViolation); // 1 card
   });
 });
 

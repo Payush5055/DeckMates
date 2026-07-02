@@ -2,7 +2,6 @@
 
 import { Suspense, useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import Link from 'next/link';
 import { useAuth } from '@/lib/authContext';
 import { sound } from '@/lib/audio';
 import { Button } from '@/components/ui/Button';
@@ -173,12 +172,10 @@ function UsernamePicker() {
 }
 
 function Centered({ children }: { children: React.ReactNode }) {
+  // Branding comes from the global header; this card holds just the form.
   return (
-    <main className="flex min-h-screen items-center justify-center px-4">
-      <div className="w-full max-w-sm rounded-2xl bg-surface p-7 text-center shadow-table ring-1 ring-gold/20">
-        <Link href="/" className="mb-4 inline-block font-serif text-xl text-gold">
-          DeckMates
-        </Link>
+    <main className="flex min-h-[70vh] items-center justify-center px-4">
+      <div className="w-full max-w-sm rounded-2xl bg-surface p-7 shadow-table ring-1 ring-gold/20">
         <div className="text-left">{children}</div>
       </div>
     </main>

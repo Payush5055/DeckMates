@@ -189,6 +189,45 @@ describe('GameServer end-to-end', () => {
     expect(leader.latest!.room.currentTrick[0]!.card).toEqual(card);
   });
 
+  it('broadcasts the completed 4-card trick and holds it before resolving (4th-card fix)', async () => {
+    const { all } = await seatFourPlayers();
+    await waitFor(() => all.every((p) => p.hand.length === 13));
+    await completeBidding(all);
+    await waitFor(() => all.every((p) => p.latest!.room.phase === 'playing'));
+
+    // Record the maximum trick size each client ever observes.
+    const maxTrickSeen = new Map<Peer, number>();
+    for (const p of all) {
+      maxTrickSeen.set(p, 0);
+      p.socket.on(ServerEvents.RoomStateUpdate, (u: RoomStateUpdate) => {
+        maxTrickSeen.set(p, Math.max(maxTrickSeen.get(p)!, u.room.currentTrick.length));
+      });
+    }
+
+    // Play one full trick: whoever is on the clock plays their first legal card.
+    for (let i = 0; i < 4; i++) {
+      await waitFor(() => all.some((p) => p.latest!.room.turn === p.seat));
+      const onClock = all.find((p) => p.latest!.room.turn === p.seat)!;
+      const before = onClock.hand.length;
+      onClock.socket.emit(ClientEvents.PlayCard, { card: onClock.latest!.self!.legalPlays[0]! });
+      await waitFor(() => onClock.hand.length === before - 1);
+    }
+
+    // Every client must have SEEN the all-4-cards state (this was the bug).
+    await waitFor(() => all.every((p) => maxTrickSeen.get(p)! === 4));
+    // During the hold nobody is on the clock.
+    expect(all[0]!.latest!.room.turn).toBeNull();
+    expect(all[0]!.latest!.room.players.reduce((n, pl) => n + pl.tricksWon, 0)).toBe(0);
+
+    // After the hold (TRICK_HOLD_MS=80 in tests) the trick resolves: pile
+    // cleared, exactly one trick awarded, winner on the clock.
+    await waitFor(() => all[0]!.latest!.room.currentTrick.length === 0);
+    await waitFor(
+      () => all[0]!.latest!.room.players.reduce((n, pl) => n + pl.tricksWon, 0) === 1,
+    );
+    expect(all[0]!.latest!.room.turn).not.toBeNull();
+  });
+
   it('holds a dropped player’s seat instead of dropping it immediately', async () => {
     const { code, all } = await seatFourPlayers();
     await waitFor(() => all.every((p) => p.hand.length === 13));
