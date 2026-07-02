@@ -8,6 +8,8 @@ import { sound } from '@/lib/audio';
 import { Button } from '@/components/ui/Button';
 import { Overlay } from '@/components/ui/Overlay';
 import { SuitBullet, SuitDivider } from '@/components/ui/SuitDivider';
+import { AmbientPips } from '@/components/ui/AmbientPips';
+import { DetailCardIntro } from '@/components/DetailCardIntro';
 import type { CreateRoomReq } from '@cardadda/shared';
 
 const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL ?? 'http://localhost:4000';
@@ -86,10 +88,15 @@ export default function CallbreakDetailPage() {
   }
 
   return (
-    <main className="mx-auto max-w-3xl px-4 pb-16">
-      <header className="mt-2 rounded-3xl bg-surface px-8 py-10 shadow-table ring-1 ring-gold/20">
-        <h1 className="font-serif text-4xl text-ink">Callbreak</h1>
-        <p className="mt-2 text-muted">A four-player trick-taking classic. Bid boldly, break with spades.</p>
+    <>
+      <AmbientPips />
+      <main className="relative z-10 mx-auto max-w-3xl px-4 pb-16">
+      <header className="relative mt-2 overflow-hidden rounded-3xl bg-surface px-8 py-10 shadow-table ring-1 ring-gold/20">
+        <div className="relative z-10 max-w-md">
+          <h1 className="font-serif text-4xl text-ink">Callbreak</h1>
+          <p className="mt-2 text-muted">A four-player trick-taking classic. Bid boldly, break with spades.</p>
+        </div>
+        <DetailCardIntro />
       </header>
 
       <section className="mt-8 grid gap-8 md:grid-cols-2">
@@ -190,6 +197,7 @@ export default function CallbreakDetailPage() {
           </div>
         </Overlay>
       )}
-    </main>
+      </main>
+    </>
   );
 }

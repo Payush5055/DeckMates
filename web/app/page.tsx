@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { SuitDivider } from '@/components/ui/SuitDivider';
+import { AmbientPips } from '@/components/ui/AmbientPips';
 
 /** Netflix-style browse: hero + a row of game cards (only Callbreak is live). */
 
@@ -20,7 +21,9 @@ const GAMES: GameCard[] = [
 
 export default function HomePage() {
   return (
-    <main className="mx-auto max-w-5xl px-4 pb-16">
+    <>
+      <AmbientPips />
+      <main className="relative z-10 mx-auto max-w-5xl px-4 pb-16">
       {/* Hero (global header + sign-in state come from the root layout) */}
       <section className="relative overflow-hidden rounded-3xl bg-surface px-8 py-16 shadow-table ring-1 ring-gold/20">
         <span className="pointer-events-none absolute -right-6 top-1/2 -translate-y-1/2 select-none text-[16rem] leading-none text-black/15" aria-hidden>
@@ -78,6 +81,7 @@ export default function HomePage() {
           )}
         </div>
       </section>
-    </main>
+      </main>
+    </>
   );
 }

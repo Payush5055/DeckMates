@@ -6,6 +6,31 @@
   color-scheme: dark;
 }
 
+/* Ambient background suit-pips: a slow, gentle drift used only on wide screens
+   to fill the dead side-margins. Kept very low opacity — background texture. */
+@keyframes pip-drift {
+  0% {
+    transform: translateY(0) rotate(0deg);
+  }
+  50% {
+    transform: translateY(-26px) rotate(6deg);
+  }
+  100% {
+    transform: translateY(0) rotate(0deg);
+  }
+}
+
+.ambient-pip {
+  animation: pip-drift 24s ease-in-out infinite;
+  will-change: transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ambient-pip {
+    animation: none;
+  }
+}
+
 html,
 body {
   height: 100%;

@@ -15,6 +15,7 @@ import { TrickCards } from '@/components/phases/TrickCards';
 import { YourHand } from '@/components/phases/YourHand';
 import { RoundCompletePanel } from '@/components/phases/RoundCompletePanel';
 import { MatchEndPanel } from '@/components/phases/MatchEndPanel';
+import { ScoresPanel } from '@/components/phases/ScoresPanel';
 import { POS_ANCHOR, POS_COLOR, relativePosition } from '@/lib/seatLayout';
 import { cardId, type Seat } from '@cardadda/shared';
 
@@ -40,6 +41,7 @@ export function TableView({ code }: { code: string }) {
   const router = useRouter();
 
   const [copied, setCopied] = useState(false);
+  const [showScores, setShowScores] = useState(false);
   const [intro, setIntro] = useState<Intro>(null);
   const attempted = useRef(false);
   const introducedRound = useRef(-1);
@@ -123,16 +125,30 @@ export function TableView({ code }: { code: string }) {
   const canPlay = !intro && room.phase === 'playing' && isMyTurn;
   const showHand = !intro && (room.phase === 'bidding' || room.phase === 'playing') && self.hand.length > 0;
 
+  const inGame = room.phase !== 'waiting';
+  const showBottomBar = !intro && (room.phase === 'bidding' || room.phase === 'playing');
+
   return (
-    <div className="mx-auto flex min-h-screen max-w-4xl flex-col px-3 pb-6">
-      {/* Table toolbar — branding lives in the global header; no scores here,
-          keeping trick-play focused on the table. */}
+    <div className={`mx-auto flex min-h-screen max-w-4xl flex-col px-3 ${showBottomBar ? 'pb-60' : 'pb-6'}`}>
+      {/* Table toolbar — branding lives in the global header. Scores are a
+          toggle (below) rather than an always-on panel. */}
       <header className="flex items-center justify-end py-1">
         <div className="flex items-center gap-3 text-sm text-muted">
-          {room.phase !== 'waiting' && (
+          {inGame && (
             <span className="tabular">
               Round {room.roundNumber}/{room.totalRounds}
             </span>
+          )}
+          {inGame && (
+            <button
+              onClick={() => setShowScores((v) => !v)}
+              aria-pressed={showScores}
+              className={`rounded-lg px-2 py-1 ring-1 ring-ink/20 transition hover:text-gold ${
+                showScores ? 'text-gold ring-gold/50' : 'text-ink/70'
+              }`}
+            >
+              Scores
+            </button>
           )}
           <MuteToggle />
           <button onClick={handleLeave} className="rounded-lg px-2 py-1 text-ink/70 ring-1 ring-ink/20 hover:text-wine">
@@ -140,6 +156,16 @@ export function TableView({ code }: { code: string }) {
           </button>
         </div>
       </header>
+
+      {/* Live cumulative scores — toggled open/closed by the player. */}
+      {inGame && showScores && (
+        <ScoresPanel
+          players={room.players}
+          scores={room.scores}
+          youSeat={you}
+          onClose={() => setShowScores(false)}
+        />
+      )}
 
       {error && (
         <div className="mb-2 flex items-center justify-between rounded-xl bg-wine/25 px-4 py-2 text-sm text-ink ring-1 ring-wine/50">
@@ -226,26 +252,29 @@ export function TableView({ code }: { code: string }) {
         </div>
       )}
 
-      {/* Bidding controls — everyone bids at once, privately. */}
-      {!intro && room.phase === 'bidding' && (
-        <div className="mt-5">
-          {canBid ? (
-            <BiddingControls onBid={placeBid} disabled={false} />
-          ) : (
-            <p className="text-center text-muted">Bid placed — waiting for the others… ({bidsIn}/4)</p>
-          )}
-        </div>
-      )}
-
-      {/* Your hand */}
-      {showHand && (
-        <div className="mt-auto">
-          {room.phase === 'playing' && (
-            <p className={`mb-1 text-center ${canPlay ? 'font-serif text-lg text-gold' : 'text-sm text-muted'}`}>
-              {canPlay ? 'Your turn — play a card' : 'Waiting for your turn…'}
-            </p>
-          )}
-          <YourHand cards={self.hand} legalIds={legalIds} canPlay={canPlay} onPlay={playCard} />
+      {/* Bidding controls + your hand, PINNED to the bottom of the viewport so
+          they stay reachable regardless of table size or scroll. */}
+      {showBottomBar && (
+        <div className="fixed inset-x-0 bottom-0 z-30 bg-gradient-to-t from-rim via-rim/95 to-transparent pb-3 pt-6">
+          <div className="mx-auto max-w-4xl px-3">
+            {room.phase === 'bidding' && (
+              <div className="mb-2">
+                {canBid ? (
+                  <BiddingControls onBid={placeBid} disabled={false} />
+                ) : (
+                  <p className="text-center text-muted">Bid placed — waiting for the others… ({bidsIn}/4)</p>
+                )}
+              </div>
+            )}
+            {room.phase === 'playing' && (
+              <p className={`mb-1 text-center ${canPlay ? 'font-serif text-lg text-gold' : 'text-sm text-muted'}`}>
+                {canPlay ? 'Your turn — play a card' : 'Waiting for your turn…'}
+              </p>
+            )}
+            {showHand && (
+              <YourHand cards={self.hand} legalIds={legalIds} canPlay={canPlay} onPlay={playCard} />
+            )}
+          </div>
         </div>
       )}
 
