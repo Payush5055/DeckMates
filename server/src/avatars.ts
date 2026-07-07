@@ -1,9 +1,9 @@
-import type { Seat } from '@cardadda/engine';
-
-/** Simple deterministic avatar per seat (no uploads in v1). */
+/** Simple deterministic avatar per seat (no uploads in v1). Shared across games
+ * — widened to plain `number` so any game's seat index (0-based) works, not
+ * just Callbreak's fixed 0|1|2|3. */
 const SEAT_AVATARS = ['🦊', '🐼', '🐧', '🦁'] as const;
 
-export function avatarForSeat(seat: Seat): string {
+export function avatarForSeat(seat: number): string {
   return SEAT_AVATARS[seat] ?? '🎴';
 }
 

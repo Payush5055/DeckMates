@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@cardadda/engine": "*",
+    "@cardadda/crazy8-engine": "*",
     "@cardadda/shared": "*",
     "@supabase/supabase-js": "^2.45.4",
     "framer-motion": "^11.5.4",

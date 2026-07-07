@@ -11,6 +11,7 @@ import cors from 'cors';
 import { Server as SocketServer } from 'socket.io';
 import { config } from './config';
 import { GameServer } from './gameServer';
+import { Crazy8GameServer } from './crazy8GameServer';
 import { createHistoryStore, type MatchHistoryStore } from './persistence';
 import { verifyToken } from './auth';
 import { log } from './logger';
@@ -19,6 +20,7 @@ export interface BuiltServer {
   http: HttpServer;
   io: SocketServer;
   game: GameServer;
+  crazy8: Crazy8GameServer;
   store: MatchHistoryStore;
 }
 
@@ -49,7 +51,13 @@ export async function buildServer(): Promise<BuiltServer> {
   });
 
   const game = new GameServer(io, store);
-  io.on('connection', (socket) => game.register(socket));
+  const crazy8 = new Crazy8GameServer(io, store);
+  // Both game handlers attach to every authenticated socket; each listens for
+  // its own namespaced event names, so one connection serves both games.
+  io.on('connection', (socket) => {
+    game.register(socket);
+    crazy8.register(socket);
+  });
 
   // ── HTTP routes ──────────────────────────────────────────────────────────
   app.get('/health', (_req, res) => {
@@ -82,6 +90,9 @@ export async function buildServer(): Promise<BuiltServer> {
   app.get('/api/rooms/:code', (req, res) => {
     res.json(game.roomSummary(req.params.code));
   });
+  app.get('/api/rooms/crazy8/:code', (req, res) => {
+    res.json(crazy8.roomSummary(req.params.code));
+  });
 
-  return { http: httpServer, io, game, store };
+  return { http: httpServer, io, game, crazy8, store };
 }

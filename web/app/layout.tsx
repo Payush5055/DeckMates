@@ -3,6 +3,7 @@ import { DM_Sans, IBM_Plex_Mono, Playfair_Display } from 'next/font/google';
 import './globals.css';
 import { AuthProvider } from '@/lib/authContext';
 import { TableProvider } from '@/lib/socketContext';
+import { Crazy8Provider } from '@/lib/crazy8SocketContext';
 import { SiteHeader } from '@/components/SiteHeader';
 
 // Characterful serif for headings.
@@ -38,8 +39,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className="min-h-screen bg-felt text-ink">
         <AuthProvider>
           <TableProvider>
-            <SiteHeader />
-            {children}
+            <Crazy8Provider>
+              <SiteHeader />
+              {children}
+            </Crazy8Provider>
           </TableProvider>
         </AuthProvider>
       </body>

@@ -464,6 +464,7 @@ export class GameServer {
 
     // Persist match history (fire-and-forget; never blocks gameplay).
     const record: MatchRecord = {
+      gameType: 'callbreak',
       roomCode: room.code,
       playedAt: new Date().toISOString(),
       players: standings.map((s) => ({

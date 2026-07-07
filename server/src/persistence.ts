@@ -44,6 +44,7 @@ class SupabaseStore implements MatchHistoryStore {
 
   async saveMatch(record: MatchRecord): Promise<void> {
     const row = {
+      game_type: record.gameType,
       room_code: record.roomCode,
       played_at: record.playedAt,
       player_ids: record.players.map((p) => p.playerId),
@@ -63,13 +64,15 @@ class SupabaseStore implements MatchHistoryStore {
       .limit(limit);
     if (error) throw new Error(`Supabase query failed: ${error.message}`);
     return (data ?? []).map(
-      (r: any): MatchRecord => ({
-        id: r.id,
-        roomCode: r.room_code,
-        playedAt: r.played_at,
-        players: r.players,
-        rounds: r.rounds,
-      }),
+      (r: any): MatchRecord =>
+        ({
+          id: r.id,
+          gameType: r.game_type ?? 'callbreak',
+          roomCode: r.room_code,
+          playedAt: r.played_at,
+          players: r.players,
+          rounds: r.rounds,
+        }) as MatchRecord,
     );
   }
 }

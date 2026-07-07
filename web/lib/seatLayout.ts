@@ -10,10 +10,26 @@ export type Pos = 'bottom' | 'left' | 'top' | 'right';
 
 const ORDER: Pos[] = ['bottom', 'left', 'top', 'right'];
 
-/** Where `seat` appears on screen given that `you` sit at the bottom. */
-export function relativePosition(seat: Seat, you: Seat): Pos {
-  const rel = (seat - you + 4) % 4;
-  return ORDER[rel]!;
+/**
+ * Position order by total seat count. 4 always uses all four anchors
+ * (Callbreak's fixed layout, unchanged). Fewer seats (Crazy 8s' variable 2–4
+ * player tables) use a subset: 2 players face off top/bottom; 3 skip the top.
+ */
+const ORDER_BY_COUNT: Record<number, Pos[]> = {
+  2: ['bottom', 'top'],
+  3: ['bottom', 'left', 'right'],
+  4: ORDER,
+};
+
+/**
+ * Where `seat` appears on screen given that `you` sit at the bottom.
+ * `numPlayers` defaults to 4 (Callbreak's fixed table size); pass the actual
+ * seated count for variable-size tables.
+ */
+export function relativePosition(seat: Seat, you: Seat, numPlayers = 4): Pos {
+  const order = ORDER_BY_COUNT[numPlayers] ?? ORDER;
+  const rel = (seat - you + numPlayers) % numPlayers;
+  return order[rel] ?? 'bottom';
 }
 
 /** Seat colors: wine/purple/teal for opponents, gold for "you" (bottom). */

@@ -44,10 +44,14 @@ create policy "insert own profile"
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Match history
 --
--- One row per completed 5-round match, written by the server on game over.
+-- One row per completed match (any game), written by the server on game over.
+-- `game_type` discriminates which game a row belongs to (Callbreak, Crazy 8s,
+-- …); `players`/`rounds` are jsonb so each game's differently-shaped result
+-- payload fits the same table without per-game columns.
 -- ─────────────────────────────────────────────────────────────────────────────
 create table if not exists public.matches (
   id uuid primary key default gen_random_uuid(),
+  game_type text not null default 'callbreak',
   room_code text not null,
   played_at timestamptz not null default now(),
   -- Participant identities. For real players these are the authenticated user
@@ -56,15 +60,23 @@ create table if not exists public.matches (
   -- this is a plain text[] with no foreign key (Postgres also cannot FK
   -- individual array elements). Denormalized for fast "my matches" lookups.
   player_ids text[] not null,
-  -- Full per-player standings: [{ playerId, name, seat, totalTenths, rank }].
+  -- Full per-player standings, shape depends on game_type:
+  --   callbreak: [{ playerId, name, seat, totalTenths, rank }]
+  --   crazy8s:   [{ playerId, name, seat, total, rank }]
   players jsonb not null,
-  -- Per-round results for optional detail views.
+  -- Per-round results for optional detail views (shape also game-specific).
   rounds jsonb not null
 );
+
+-- Additive migration for databases created before game_type existed.
+alter table public.matches add column if not exists game_type text not null default 'callbreak';
 
 -- Fast membership queries: "matches containing this user id".
 create index if not exists matches_player_ids_idx
   on public.matches using gin (player_ids);
+
+create index if not exists matches_game_type_idx
+  on public.matches (game_type);
 
 create index if not exists matches_played_at_idx
   on public.matches (played_at desc);

@@ -11,9 +11,19 @@ import { useAuth } from '@/lib/authContext';
 import { formatTenths, ordinal } from '@/lib/format';
 import { Button } from '@/components/ui/Button';
 import { SuitDivider } from '@/components/ui/SuitDivider';
-import type { MatchRecord } from '@cardadda/shared';
+import type { Crazy8MatchPlayerRecord, MatchPlayerRecord, MatchRecord } from '@cardadda/shared';
 
 const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL ?? 'http://localhost:4000';
+
+/**
+ * Each game stores its score differently (Callbreak: decimal `totalTenths`;
+ * Crazy 8s: plain whole `total`) — TS can't narrow `p`'s type through the
+ * sort/map chain below, so branch explicitly here instead of an inline cast.
+ */
+function displayScore(m: MatchRecord, p: MatchPlayerRecord | Crazy8MatchPlayerRecord): string {
+  if (m.gameType === 'crazy8s') return String((p as Crazy8MatchPlayerRecord).total);
+  return formatTenths((p as MatchPlayerRecord).totalTenths);
+}
 
 export default function AccountPage() {
   const { ready, user, needsUsername, token, signOut } = useAuth();
@@ -82,10 +92,14 @@ export default function AccountPage() {
       <ul className="flex flex-col gap-4">
         {matches?.map((m) => {
           const winnerRank = Math.min(...m.players.map((p) => p.rank));
+          const gameLabel = m.gameType === 'crazy8s' ? 'Crazy 8s' : 'Callbreak';
           return (
             <li key={m.id ?? m.roomCode + m.playedAt} className="rounded-2xl bg-surface p-5 ring-1 ring-gold/15">
               <div className="mb-3 flex items-center justify-between text-sm text-muted">
-                <span className="tabular">Room {m.roomCode}</span>
+                <span>
+                  <span className="text-gold">{gameLabel}</span>
+                  <span className="tabular"> · Room {m.roomCode}</span>
+                </span>
                 <span>{new Date(m.playedAt).toLocaleString()}</span>
               </div>
               <ul className="flex flex-col gap-1.5">
@@ -97,7 +111,7 @@ export default function AccountPage() {
                       <span className={`flex-1 ${p.rank === winnerRank ? 'text-ink' : 'text-ink/80'}`}>
                         {p.name}
                       </span>
-                      <span className="tabular font-semibold text-ink">{formatTenths(p.totalTenths)}</span>
+                      <span className="tabular font-semibold text-ink">{displayScore(m, p)}</span>
                     </li>
                   ))}
               </ul>
