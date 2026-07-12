@@ -14,9 +14,9 @@ interface GameCard {
 const GAMES: GameCard[] = [
   { slug: 'callbreak', title: 'Callbreak', tag: '4 players · Trick-taking', live: true },
   { slug: 'crazy8s', title: 'Crazy 8s', tag: '2–4 players · Match & go wild', live: true },
+  { slug: '31', title: '31', tag: '4 players · Knock & survive', live: true },
   { slug: 'rummy', title: 'Rummy', tag: 'Coming soon', live: false },
   { slug: 'teen-patti', title: 'Teen Patti', tag: 'Coming soon', live: false },
-  { slug: 'hearts', title: 'Hearts', tag: 'Coming soon', live: false },
 ];
 
 export default function HomePage() {

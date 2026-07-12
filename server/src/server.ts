@@ -12,6 +12,7 @@ import { Server as SocketServer } from 'socket.io';
 import { config } from './config';
 import { GameServer } from './gameServer';
 import { Crazy8GameServer } from './crazy8GameServer';
+import { ThirtyOneGameServer } from './thirtyOneGameServer';
 import { createHistoryStore, type MatchHistoryStore } from './persistence';
 import { verifyToken } from './auth';
 import { log } from './logger';
@@ -21,6 +22,7 @@ export interface BuiltServer {
   io: SocketServer;
   game: GameServer;
   crazy8: Crazy8GameServer;
+  thirtyOne: ThirtyOneGameServer;
   store: MatchHistoryStore;
 }
 
@@ -52,11 +54,13 @@ export async function buildServer(): Promise<BuiltServer> {
 
   const game = new GameServer(io, store);
   const crazy8 = new Crazy8GameServer(io, store);
-  // Both game handlers attach to every authenticated socket; each listens for
-  // its own namespaced event names, so one connection serves both games.
+  const thirtyOne = new ThirtyOneGameServer(io, store);
+  // All game handlers attach to every authenticated socket; each listens for
+  // its own namespaced event names, so one connection serves every game.
   io.on('connection', (socket) => {
     game.register(socket);
     crazy8.register(socket);
+    thirtyOne.register(socket);
   });
 
   // ── HTTP routes ──────────────────────────────────────────────────────────
@@ -93,6 +97,9 @@ export async function buildServer(): Promise<BuiltServer> {
   app.get('/api/rooms/crazy8/:code', (req, res) => {
     res.json(crazy8.roomSummary(req.params.code));
   });
+  app.get('/api/rooms/thirtyone/:code', (req, res) => {
+    res.json(thirtyOne.roomSummary(req.params.code));
+  });
 
-  return { http: httpServer, io, game, crazy8, store };
+  return { http: httpServer, io, game, crazy8, thirtyOne, store };
 }

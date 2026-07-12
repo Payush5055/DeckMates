@@ -14,7 +14,8 @@
   },
   "dependencies": {
     "@cardadda/engine": "*",
-    "@cardadda/crazy8-engine": "*"
+    "@cardadda/crazy8-engine": "*",
+    "@cardadda/thirtyone-engine": "*"
   },
   "devDependencies": {
     "typescript": "^5.6.2"

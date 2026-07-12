@@ -13,6 +13,11 @@ import type {
   Seat as Crazy8Seat,
   Suit as Crazy8Suit,
 } from '@cardadda/crazy8-engine';
+import type {
+  Card as T1Card,
+  Seat as T1Seat,
+  TurnStage as T1TurnStage,
+} from '@cardadda/thirtyone-engine';
 
 export type { Card, Seat } from '@cardadda/engine';
 // Re-export the display/value helpers the UI needs so clients can import them
@@ -188,7 +193,7 @@ export interface CallbreakMatchRecord {
  * server/supabase/schema.sql), discriminated by `gameType`. Add a new arm here
  * when a new game gains history persistence.
  */
-export type MatchRecord = CallbreakMatchRecord | Crazy8MatchRecord;
+export type MatchRecord = CallbreakMatchRecord | Crazy8MatchRecord | ThirtyOneMatchRecord;
 
 /* ── Event name constants (single source of truth) ────────────────────────── */
 
@@ -377,3 +382,175 @@ export const Crazy8ServerEvents = {
 // Re-export the Crazy8 card-kernel types/helpers the UI needs from one place.
 export type { Card as Crazy8Card, Seat as Crazy8Seat, Suit as Crazy8Suit } from '@cardadda/crazy8-engine';
 export { WILD_RANK as CRAZY8_WILD_RANK } from '@cardadda/crazy8-engine';
+
+/* ═════════════════════════════════════════════════════════════════════════
+ * 31 (Scat/Blitz) — the third game. Distinct `thirtyone_*` event names keep it
+ * collision-free on the same authenticated socket. Tables are always 4 seats
+ * (bots fill gaps, same chooser as the other games). Lives, not points.
+ * ═════════════════════════════════════════════════════════════════════════ */
+
+/** Public, per-seat info visible to everyone. NO cards here. */
+export interface ThirtyOnePublicPlayer {
+  seat: T1Seat;
+  name: string;
+  avatar: string;
+  connected: boolean;
+  isHost: boolean;
+  isBot: boolean;
+  lives: number;
+  eliminated: boolean;
+  /** How many cards this player holds (3, or 4 mid-turn) — a count only. */
+  cardCount: number;
+}
+
+/** Shared table state broadcast to every client. Contains no private hands. */
+export interface ThirtyOnePublicRoomState {
+  roomCode: string;
+  phase: 'waiting' | 'playing' | 'roundEnd' | 'gameOver';
+  players: ThirtyOnePublicPlayer[];
+  seatsFilled: number;
+  roundNumber: number;
+  /** Seat whose turn it is, or null when nobody is on the clock. */
+  turn: T1Seat | null;
+  /** Where the active player is in their turn: draw (or knock) → discard. */
+  stage: T1TurnStage | null;
+  /** The face-up top card of the discard pile. */
+  topDiscard: T1Card | null;
+  drawPileCount: number;
+  knockerSeat: T1Seat | null;
+  /** After a knock: how many final turns remain before the reveal. */
+  finalTurnsRemaining: number | null;
+  /** Lives per seat (0 = eliminated). */
+  lives: number[];
+  hostPlayerId: string;
+}
+
+/** The personalized slice sent only to its owner — the ONLY carrier of cards. */
+export interface ThirtyOneSelfState {
+  playerId: string;
+  seat: T1Seat;
+  /** This recipient's own hand (3 cards, or 4 after drawing). */
+  hand: T1Card[];
+  /** True when it's your turn and you may draw (start of turn). */
+  canDraw: boolean;
+  /** True when you may knock instead of drawing (nobody has knocked yet). */
+  canKnock: boolean;
+  /** True when you've drawn and must now discard one of your 4 cards. */
+  mustDiscard: boolean;
+}
+
+/** Payload of every `thirtyone_room_state_update`. */
+export interface ThirtyOneRoomStateUpdate {
+  room: ThirtyOnePublicRoomState;
+  self: ThirtyOneSelfState | null;
+}
+
+/** The reveal: all hands face-up with values, who lost what, and why. */
+export interface ThirtyOneRoundResultPayload {
+  roundNumber: number;
+  reason: 'knock' | 'instant31';
+  knockerSeat: T1Seat | null;
+  winners31: T1Seat[];
+  revealedHands: (T1Card[] | null)[];
+  handValues: (number | null)[];
+  livesLost: number[];
+  livesAfter: number[];
+  /** True when the knocker was strictly lowest and lost 2 lives. */
+  doublePenalty: boolean;
+  /** True when the round was voided (all-out tie guard) and is replayed. */
+  voided: boolean;
+  playerNames: string[];
+  isBot: boolean[];
+}
+
+export interface ThirtyOneFinalStanding {
+  seat: T1Seat;
+  playerId: string;
+  name: string;
+  isBot: boolean;
+  lives: number;
+  /** 1-based placement: the survivor is 1st; earlier eliminations rank lower. */
+  rank: number;
+}
+
+export interface ThirtyOneGameOverPayload {
+  standings: ThirtyOneFinalStanding[];
+  rounds: ThirtyOneRoundResultPayload[];
+}
+
+/* ── Client → Server request/ack payloads ─────────────────────────────────── */
+
+export interface ThirtyOneCreateRoomReq {
+  /** 'bots' fills all 3 other seats with bots and starts immediately;
+   * 'teammates' waits for that many real players, then backfills with bots. */
+  mode: 'bots' | 'teammates';
+  teammates?: number;
+}
+export interface ThirtyOneCreateRoomRes {
+  ok: boolean;
+  roomCode?: string;
+  error?: string;
+}
+
+export interface ThirtyOneJoinRoomReq {
+  roomCode: string;
+}
+export interface ThirtyOneJoinRoomRes {
+  ok: boolean;
+  seat?: T1Seat;
+  error?: string;
+}
+
+export interface ThirtyOneDrawReq {
+  source: 'pile' | 'discard';
+}
+export interface ThirtyOneDiscardReq {
+  card: T1Card;
+}
+export interface ThirtyOnePlayAgainRes {
+  ok: boolean;
+  roomCode?: string;
+  error?: string;
+}
+
+/* ── History persistence record ───────────────────────────────────────────── */
+
+export interface ThirtyOneMatchPlayerRecord {
+  playerId: string;
+  name: string;
+  seat: T1Seat;
+  lives: number;
+  rank: number;
+}
+
+export interface ThirtyOneMatchRecord {
+  id?: string;
+  gameType: '31';
+  roomCode: string;
+  playedAt: string;
+  players: ThirtyOneMatchPlayerRecord[];
+  rounds: ThirtyOneRoundResultPayload[];
+}
+
+/* ── Event name constants ─────────────────────────────────────────────────── */
+
+export const ThirtyOneClientEvents = {
+  CreateRoom: 'thirtyone_create_room',
+  JoinRoom: 'thirtyone_join_room',
+  Knock: 'thirtyone_knock',
+  DrawCard: 'thirtyone_draw_card',
+  DiscardCard: 'thirtyone_discard_card',
+  LeaveRoom: 'thirtyone_leave_room',
+  PlayAgain: 'thirtyone_play_again',
+} as const;
+
+export const ThirtyOneServerEvents = {
+  RoomStateUpdate: 'thirtyone_room_state_update',
+  RoundResult: 'thirtyone_round_result',
+  GameOver: 'thirtyone_game_over',
+  ErrorMessage: 'thirtyone_error_message',
+  PlayAgainRoom: 'thirtyone_play_again_room',
+} as const;
+
+// Re-export the 31 card-kernel types the UI needs from one place.
+export type { Card as ThirtyOneCard, Seat as ThirtyOneSeat } from '@cardadda/thirtyone-engine';

@@ -11,19 +11,36 @@ import { useAuth } from '@/lib/authContext';
 import { formatTenths, ordinal } from '@/lib/format';
 import { Button } from '@/components/ui/Button';
 import { SuitDivider } from '@/components/ui/SuitDivider';
-import type { Crazy8MatchPlayerRecord, MatchPlayerRecord, MatchRecord } from '@cardadda/shared';
+import type {
+  Crazy8MatchPlayerRecord,
+  MatchPlayerRecord,
+  MatchRecord,
+  ThirtyOneMatchPlayerRecord,
+} from '@cardadda/shared';
 
 const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL ?? 'http://localhost:4000';
 
+type AnyPlayerRecord = MatchPlayerRecord | Crazy8MatchPlayerRecord | ThirtyOneMatchPlayerRecord;
+
 /**
- * Each game stores its score differently (Callbreak: decimal `totalTenths`;
- * Crazy 8s: plain whole `total`) — TS can't narrow `p`'s type through the
- * sort/map chain below, so branch explicitly here instead of an inline cast.
+ * Each game stores its result differently (Callbreak: decimal `totalTenths`;
+ * Crazy 8s: whole-point `total`; 31: `lives` remaining) — TS can't narrow `p`
+ * through the sort/map chain below, so branch explicitly here.
  */
-function displayScore(m: MatchRecord, p: MatchPlayerRecord | Crazy8MatchPlayerRecord): string {
+function displayScore(m: MatchRecord, p: AnyPlayerRecord): string {
   if (m.gameType === 'crazy8s') return String((p as Crazy8MatchPlayerRecord).total);
+  if (m.gameType === '31') {
+    const lives = (p as ThirtyOneMatchPlayerRecord).lives;
+    return lives > 0 ? '♥'.repeat(lives) : 'Out';
+  }
   return formatTenths((p as MatchPlayerRecord).totalTenths);
 }
+
+const GAME_LABELS: Record<MatchRecord['gameType'], string> = {
+  callbreak: 'Callbreak',
+  crazy8s: 'Crazy 8s',
+  '31': '31',
+};
 
 export default function AccountPage() {
   const { ready, user, needsUsername, token, signOut } = useAuth();
@@ -92,7 +109,7 @@ export default function AccountPage() {
       <ul className="flex flex-col gap-4">
         {matches?.map((m) => {
           const winnerRank = Math.min(...m.players.map((p) => p.rank));
-          const gameLabel = m.gameType === 'crazy8s' ? 'Crazy 8s' : 'Callbreak';
+          const gameLabel = GAME_LABELS[m.gameType] ?? 'Callbreak';
           return (
             <li key={m.id ?? m.roomCode + m.playedAt} className="rounded-2xl bg-surface p-5 ring-1 ring-gold/15">
               <div className="mb-3 flex items-center justify-between text-sm text-muted">

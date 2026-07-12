@@ -4,6 +4,7 @@ import './globals.css';
 import { AuthProvider } from '@/lib/authContext';
 import { TableProvider } from '@/lib/socketContext';
 import { Crazy8Provider } from '@/lib/crazy8SocketContext';
+import { ThirtyOneProvider } from '@/lib/thirtyOneSocketContext';
 import { SiteHeader } from '@/components/SiteHeader';
 
 // Characterful serif for headings.
@@ -40,8 +41,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <AuthProvider>
           <TableProvider>
             <Crazy8Provider>
-              <SiteHeader />
-              {children}
+              <ThirtyOneProvider>
+                <SiteHeader />
+                {children}
+              </ThirtyOneProvider>
             </Crazy8Provider>
           </TableProvider>
         </AuthProvider>
