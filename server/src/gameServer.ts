@@ -36,6 +36,7 @@ import {
   type PlayCardReq,
   type RoundResultPayload,
 } from '@cardadda/shared';
+import { callbreakPayoutDelta } from '@cardadda/economy-engine';
 import { config } from './config';
 import { generateUniqueRoomCode } from './codes';
 import { avatarForSeat } from './avatars';
@@ -43,6 +44,7 @@ import { chooseBid, chooseCard } from './botAI';
 import { buildPublicRoomState, buildSelfState } from './redact';
 import { Room, RoomPlayer } from './room';
 import { MatchHistoryStore } from './persistence';
+import { adjustBalance, WalletStore } from './wallet';
 import { log } from './logger';
 
 /** Bots act after a short, human-like pause (spec: 800–1500ms). */
@@ -69,6 +71,7 @@ export class GameServer {
   constructor(
     private readonly io: Server,
     private readonly history: MatchHistoryStore,
+    private readonly wallet: WalletStore,
   ) {}
 
   /** Attach handlers for a freshly connected socket. */
@@ -452,11 +455,20 @@ export class GameServer {
     room.botTimers.set(seat, timer);
   }
 
-  private handleGameOver(room: Room): void {
+  private async handleGameOver(room: Room): Promise<void> {
     const game = room.game;
     if (!game) return;
     const standings = this.buildStandings(room);
     const rounds = room.game!.history.map((r) => this.toRoundResultPayload(room, r.roundNumber, r));
+
+    await Promise.all(
+      standings.map(async (s) => {
+        if (s.isBot) return;
+        const delta = callbreakPayoutDelta(s.totalTenths);
+        s.moneyDelta = delta;
+        s.newBalance = await adjustBalance(this.wallet, s.playerId, delta);
+      }),
+    );
 
     const payload: GameOverPayload = { standings, rounds };
     this.broadcastToRoom(room, ServerEvents.GameOver, payload);

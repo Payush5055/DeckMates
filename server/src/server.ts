@@ -15,6 +15,7 @@ import { Crazy8GameServer } from './crazy8GameServer';
 import { ThirtyOneGameServer } from './thirtyOneGameServer';
 import { TeenPattiGameServer } from './teenPattiGameServer';
 import { createHistoryStore, type MatchHistoryStore } from './persistence';
+import { createWalletStore, type WalletStore } from './wallet';
 import { verifyToken } from './auth';
 import { log } from './logger';
 
@@ -26,10 +27,12 @@ export interface BuiltServer {
   thirtyOne: ThirtyOneGameServer;
   teenPatti: TeenPattiGameServer;
   store: MatchHistoryStore;
+  wallet: WalletStore;
 }
 
 export async function buildServer(): Promise<BuiltServer> {
   const store = await createHistoryStore();
+  const wallet = await createWalletStore();
 
   const app = express();
   app.use(cors({ origin: config.corsOrigin }));
@@ -54,10 +57,10 @@ export async function buildServer(): Promise<BuiltServer> {
     }
   });
 
-  const game = new GameServer(io, store);
-  const crazy8 = new Crazy8GameServer(io, store);
-  const thirtyOne = new ThirtyOneGameServer(io, store);
-  const teenPatti = new TeenPattiGameServer(io, store);
+  const game = new GameServer(io, store, wallet);
+  const crazy8 = new Crazy8GameServer(io, store, wallet);
+  const thirtyOne = new ThirtyOneGameServer(io, store, wallet);
+  const teenPatti = new TeenPattiGameServer(io, store, wallet);
   // All game handlers attach to every authenticated socket; each listens for
   // its own namespaced event names, so one connection serves every game.
   io.on('connection', (socket) => {
@@ -94,6 +97,27 @@ export async function buildServer(): Promise<BuiltServer> {
     }
   });
 
+  // Persistent wallet balance for the signed-in user (used by the account/
+  // header UI and by each table before a session starts).
+  app.get('/api/wallet', async (req, res) => {
+    const auth = req.header('authorization') ?? '';
+    const token = auth.toLowerCase().startsWith('bearer ') ? auth.slice(7).trim() : '';
+    let userId: string;
+    try {
+      ({ userId } = await verifyToken(token));
+    } catch {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    try {
+      const balance = await wallet.getBalance(userId);
+      res.json({ balance });
+    } catch (err) {
+      log.error('Wallet query failed', err);
+      res.status(500).json({ error: 'Failed to load balance' });
+    }
+  });
+
   // Lightweight room existence/summary for the join flow's UX.
   app.get('/api/rooms/:code', (req, res) => {
     res.json(game.roomSummary(req.params.code));
@@ -108,5 +132,5 @@ export async function buildServer(): Promise<BuiltServer> {
     res.json(teenPatti.roomSummary(req.params.code));
   });
 
-  return { http: httpServer, io, game, crazy8, thirtyOne, teenPatti, store };
+  return { http: httpServer, io, game, crazy8, thirtyOne, teenPatti, store, wallet };
 }

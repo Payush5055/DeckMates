@@ -10,9 +10,11 @@ import { PlayingCard } from '@/components/table/PlayingCard';
 import { Button } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { MuteToggle } from '@/components/ui/MuteToggle';
+import { Overlay } from '@/components/ui/Overlay';
 import { TeenPattiGameOverPanel } from '@/components/teenpatti/TeenPattiGameOverPanel';
 import { useTeenPatti } from '@/lib/teenPattiSocketContext';
 import { useAuth } from '@/lib/authContext';
+import { formatMoneyDelta } from '@/lib/format';
 import type { TeenPattiCard, TeenPattiSeat } from '@cardadda/shared';
 
 type Pos = 'bottom' | 'left' | 'top' | 'right' | 'topLeft' | 'topRight';
@@ -78,9 +80,11 @@ export function TeenPattiTableView({ code }: { code: string }) {
     room,
     self,
     gameOver,
+    sessionSettled,
     error,
     playAgainCode,
     clearError,
+    clearSessionSettled,
     consumePlayAgainCode,
     joinRoom,
     startNow,
@@ -137,7 +141,9 @@ export function TeenPattiTableView({ code }: { code: string }) {
 
   function handleLeave() {
     leaveRoom();
-    router.push('/');
+    // Navigation happens once the session-settled summary is dismissed (see
+    // the overlay below) rather than immediately — leaving always settles
+    // this session server-side, and the player should see the outcome.
   }
 
   if (!authReady || !user || needsUsername) {
@@ -183,7 +189,7 @@ export function TeenPattiTableView({ code }: { code: string }) {
 
       {showLeaveConfirm && (
         <ConfirmDialog
-          message="Leaving an active Teen Patti hand ends the table for everyone."
+          message="Leaving settles your session immediately — any hand you're in ends for you right away, and the table continues without you (unless you're the last real player at it)."
           confirmLabel="Leave anyway"
           cancelLabel="Cancel"
           onConfirm={() => {
@@ -192,6 +198,38 @@ export function TeenPattiTableView({ code }: { code: string }) {
           }}
           onCancel={() => setShowLeaveConfirm(false)}
         />
+      )}
+
+      {sessionSettled && (
+        <Overlay>
+          <div className="w-full max-w-sm rounded-2xl bg-surface p-6 text-center shadow-table ring-1 ring-gold/30">
+            <h2 className="font-serif text-2xl text-ink">Session ended</h2>
+            <p className="mt-3 text-sm text-muted">Ending stack</p>
+            <p className="tabular text-2xl text-ink">₹{sessionSettled.endingAmount.toLocaleString('en-IN')}</p>
+            {sessionSettled.profitForfeited > 0 && (
+              <p className="mt-3 text-sm text-wine">
+                Profit of ₹{sessionSettled.profitForfeited.toLocaleString('en-IN')} forfeited — the wagering threshold
+                (₹{sessionSettled.requiredWager.toLocaleString('en-IN')}) wasn&apos;t met before you left.
+              </p>
+            )}
+            <p className="mt-3 text-sm text-muted">Change to your balance</p>
+            <p className={`tabular text-xl font-semibold ${sessionSettled.delta >= 0 ? 'text-emerald-400' : 'text-wine'}`}>
+              {formatMoneyDelta(sessionSettled.delta)}
+            </p>
+            <p className="mt-1 text-xs text-muted">
+              New balance: ₹{sessionSettled.newPermanentBalance.toLocaleString('en-IN')}
+            </p>
+            <Button
+              className="mt-5"
+              onClick={() => {
+                clearSessionSettled();
+                router.push('/');
+              }}
+            >
+              Continue
+            </Button>
+          </div>
+        </Overlay>
       )}
 
       {error && (
@@ -224,15 +262,16 @@ export function TeenPattiTableView({ code }: { code: string }) {
         <TableSurface>
           {room.players.map((p) => {
             const pos = positionFor(p.seat, you, numPlayers);
+            const stackLabel = `₹${p.stack.toLocaleString('en-IN')}`;
             const badge = room.phase === 'waiting'
               ? p.isBot
                 ? 'Bot seat'
                 : 'Waiting'
               : !p.active
-                ? 'Packed'
+                ? `Packed · ${stackLabel}`
                 : p.seen
-                  ? 'Seen'
-                  : 'Blind';
+                  ? `Seen · ${stackLabel}`
+                  : `Blind · ${stackLabel}`;
             const isActive = room.turn === p.seat && p.active && (room.phase === 'playing' || room.phase === 'sideShow');
             return (
               <div
@@ -330,6 +369,11 @@ export function TeenPattiTableView({ code }: { code: string }) {
 
                 {!folded && (
                   <div className="mt-4 rounded-2xl bg-surface/90 p-4 ring-1 ring-gold/20">
+                    <p className="tabular mb-2 text-center text-xs text-muted">
+                      Stack ₹{(room.players.find((p) => p.seat === you)?.stack ?? 0).toLocaleString('en-IN')} · Wagered this
+                      session ₹{self.session.wagered.toLocaleString('en-IN')} of ₹
+                      {self.session.requiredWager.toLocaleString('en-IN')} to unlock profit
+                    </p>
                     <div className="flex flex-wrap items-center justify-center gap-2">
                       {self.canSeeCards && (
                         <Button variant="ghost" onClick={seeCards}>
@@ -396,15 +440,12 @@ export function TeenPattiTableView({ code }: { code: string }) {
         </div>
       )}
 
-      {room.phase === 'gameOver' && gameOver && (
+      {room.phase === 'gameOver' && gameOver && !sessionSettled && (
         <TeenPattiGameOverPanel
           result={gameOver}
           youSeat={you}
           onPlayAgain={() => void playAgain()}
-          onHome={() => {
-            leaveRoom();
-            router.push('/');
-          }}
+          onHome={handleLeave}
         />
       )}
     </div>

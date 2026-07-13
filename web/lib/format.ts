@@ -9,6 +9,12 @@ export function formatSignedTenths(tenths: number): string {
   return tenths > 0 ? `+${s}` : s;
 }
 
+/** Signed rupee delta for a wallet payout (e.g. "+₹1,250", "-₹625"). */
+export function formatMoneyDelta(delta: number): string {
+  const amount = Math.abs(delta).toLocaleString('en-IN');
+  return delta < 0 ? `-₹${amount}` : `+₹${amount}`;
+}
+
 /** Ordinal placement label: 1 → "1st", 2 → "2nd", … */
 export function ordinal(rank: number): string {
   const mod100 = rank % 100;

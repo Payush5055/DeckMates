@@ -24,6 +24,7 @@ import type {
   Rank as TPRank,
   TeenPattiMode as TPMode,
 } from '@cardadda/teenpatti-engine';
+import type { SessionSettlement } from '@cardadda/economy-engine';
 
 export type { Card, Seat } from '@cardadda/engine';
 // Re-export the display/value helpers the UI needs so clients can import them
@@ -117,6 +118,10 @@ export interface FinalStanding {
   totalTenths: number;
   /** 1-based placement; tied totals share a rank. */
   rank: number;
+  /** Signed change to the player's persistent wallet balance. Undefined for bots. */
+  moneyDelta?: number;
+  /** The player's persistent wallet balance after this delta. Undefined for bots. */
+  newBalance?: number;
 }
 
 export interface GameOverPayload {
@@ -306,6 +311,10 @@ export interface Crazy8FinalStanding {
   total: number;
   /** 1-based placement; LOWEST total is 1st. Tied totals share a rank. */
   rank: number;
+  /** Signed change to the player's persistent wallet balance. Undefined for bots. */
+  moneyDelta?: number;
+  /** The player's persistent wallet balance after this delta. Undefined for bots. */
+  newBalance?: number;
 }
 
 export interface Crazy8GameOverPayload {
@@ -481,6 +490,10 @@ export interface ThirtyOneFinalStanding {
   lives: number;
   /** 1-based placement: the survivor is 1st; earlier eliminations rank lower. */
   rank: number;
+  /** Signed change to the player's persistent wallet balance. Undefined for bots. */
+  moneyDelta?: number;
+  /** The player's persistent wallet balance after this delta. Undefined for bots. */
+  newBalance?: number;
 }
 
 export interface ThirtyOneGameOverPayload {
@@ -580,6 +593,8 @@ export interface TeenPattiPublicPlayer {
   isBot: boolean;
   active: boolean;
   seen: boolean;
+  /** Chip stack for this session — visible to everyone at a real table. */
+  stack: number;
 }
 
 export interface TeenPattiPublicRoomState {
@@ -614,6 +629,7 @@ export interface TeenPattiSelfState {
   hand: TPCard[] | null;
   seen: boolean;
   minBet: number | null;
+  /** Already clamped to this player's remaining stack — never exceeds it. */
   maxBet: number | null;
   canSeeCards: boolean;
   canFold: boolean;
@@ -626,6 +642,17 @@ export interface TeenPattiSelfState {
     requester: TPSeat;
     cost: number;
   } | null;
+  /** This session's money context — undefined for bots (there are none client-side). */
+  session: {
+    /** Permanent balance snapshot at the moment this session began. */
+    startingPermanent: number;
+    /** startingPermanent + the session top-up. */
+    bankroll: number;
+    /** Cumulative amount wagered (bet/boot/show/side-show costs) this session. */
+    wagered: number;
+    /** Cumulative wager required before any profit can convert (see economy-engine). */
+    requiredWager: number;
+  };
 }
 
 export interface TeenPattiRoomStateUpdate {
@@ -703,6 +730,9 @@ export interface TeenPattiPlayAgainRes {
   error?: string;
 }
 
+/** Sent to a player once their Teen Patti session ends (leave, disconnect timeout, or table breakup). */
+export type TeenPattiSessionSettledPayload = SessionSettlement;
+
 export interface TeenPattiMatchPlayerRecord {
   playerId: string;
   name: string;
@@ -739,6 +769,7 @@ export const TeenPattiServerEvents = {
   GameOver: 'teenpatti_game_over',
   ErrorMessage: 'teenpatti_error_message',
   PlayAgainRoom: 'teenpatti_play_again_room',
+  SessionSettled: 'teenpatti_session_settled',
 } as const;
 
 export type {

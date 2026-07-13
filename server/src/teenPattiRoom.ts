@@ -9,6 +9,28 @@ export interface TeenPattiRoomPlayer {
   isBot: boolean;
   socketId: string | null;
   disconnectTimer: NodeJS.Timeout | null;
+  /**
+   * Set when the player has left (or their disconnect grace window expired)
+   * mid-hand but it wasn't their turn, so the engine's turn-gated `fold`
+   * can't remove them immediately. Their session is already settled at that
+   * point — this just defers the physical seat removal until their turn
+   * comes up (auto-folded then) or the hand ends.
+   */
+  leaving: boolean;
+}
+
+/**
+ * A player's money context for the current session (one continuous stay at
+ * this table, across many hands). Keyed by playerId (not seat) so it
+ * survives `compactSeats()` reshuffling seat numbers when someone leaves.
+ * Bots get an entry too (so hand economics — boot, bet bounds — work
+ * uniformly) but `startingPermanent`/`wagered` are unused for them: bots have
+ * no real wallet and are simply topped back up whenever their stack runs low.
+ */
+export interface TeenPattiWalletState {
+  stack: number;
+  wagered: number;
+  startingPermanent: number;
 }
 
 export class TeenPattiRoom {
@@ -19,6 +41,7 @@ export class TeenPattiRoom {
   players: TeenPattiRoomPlayer[] = [];
   game: GameState | null = null;
   botTimers = new Map<number, NodeJS.Timeout>();
+  wallets = new Map<string, TeenPattiWalletState>();
   readonly createdAt = Date.now();
 
   constructor(code: string, hostPlayerId: string, variant: TeenPattiMode, fillMode: 'bots' | 'teammates') {
@@ -41,7 +64,7 @@ export class TeenPattiRoom {
   }
 
   realConnectedCount(): number {
-    return this.players.filter((p) => !p.isBot && p.connected).length;
+    return this.players.filter((p) => !p.isBot && p.connected && !p.leaving).length;
   }
 
   playerById(playerId: string): TeenPattiRoomPlayer | undefined {

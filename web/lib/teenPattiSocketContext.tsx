@@ -21,6 +21,7 @@ import {
   type TeenPattiPlayAgainRes,
   type TeenPattiPublicRoomState,
   type TeenPattiRoomStateUpdate,
+  type TeenPattiSessionSettledPayload,
   type TeenPattiSideShowResReq,
   type TeenPattiSelfState,
 } from '@cardadda/shared';
@@ -33,9 +34,11 @@ interface TeenPattiContextValue {
   room: TeenPattiPublicRoomState | null;
   self: TeenPattiSelfState | null;
   gameOver: TeenPattiGameOverPayload | null;
+  sessionSettled: TeenPattiSessionSettledPayload | null;
   error: string | null;
   playAgainCode: string | null;
   clearError: () => void;
+  clearSessionSettled: () => void;
   consumePlayAgainCode: () => void;
   createRoom: (req: TeenPattiCreateRoomReq) => Promise<TeenPattiCreateRoomRes>;
   joinRoom: (roomCode: string) => Promise<TeenPattiJoinRoomRes>;
@@ -65,6 +68,7 @@ export function TeenPattiProvider({ children }: { children: React.ReactNode }) {
   const [room, setRoom] = useState<TeenPattiPublicRoomState | null>(null);
   const [self, setSelf] = useState<TeenPattiSelfState | null>(null);
   const [gameOver, setGameOver] = useState<TeenPattiGameOverPayload | null>(null);
+  const [sessionSettled, setSessionSettled] = useState<TeenPattiSessionSettledPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [playAgainCode, setPlayAgainCode] = useState<string | null>(null);
 
@@ -86,6 +90,9 @@ export function TeenPattiProvider({ children }: { children: React.ReactNode }) {
     });
     socket.on(TeenPattiServerEvents.GameOver, (payload: TeenPattiGameOverPayload) => {
       setGameOver(payload);
+    });
+    socket.on(TeenPattiServerEvents.SessionSettled, (payload: TeenPattiSessionSettledPayload) => {
+      setSessionSettled(payload);
     });
     socket.on(TeenPattiServerEvents.ErrorMessage, (payload: { message: string }) => {
       setError(payload.message);
@@ -150,9 +157,10 @@ export function TeenPattiProvider({ children }: { children: React.ReactNode }) {
 
   const leaveRoom = useCallback(() => {
     socketRef.current?.emit(TeenPattiClientEvents.LeaveRoom);
-    setRoom(null);
-    setSelf(null);
     setGameOver(null);
+    // Deliberately NOT clearing room/self here — the session-settled summary
+    // (if any) still needs a seat/room context to render against; the table
+    // view clears these itself once the player dismisses that summary.
   }, []);
 
   const playAgain = useCallback(
@@ -169,9 +177,11 @@ export function TeenPattiProvider({ children }: { children: React.ReactNode }) {
       room,
       self,
       gameOver,
+      sessionSettled,
       error,
       playAgainCode,
       clearError: () => setError(null),
+      clearSessionSettled: () => setSessionSettled(null),
       consumePlayAgainCode: () => setPlayAgainCode(null),
       createRoom,
       joinRoom,
@@ -190,6 +200,7 @@ export function TeenPattiProvider({ children }: { children: React.ReactNode }) {
       room,
       self,
       gameOver,
+      sessionSettled,
       error,
       playAgainCode,
       createRoom,

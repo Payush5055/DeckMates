@@ -35,6 +35,7 @@ import {
   type ThirtyOnePlayAgainRes,
   type ThirtyOneRoundResultPayload,
 } from '@cardadda/shared';
+import { thirtyOnePayoutDelta } from '@cardadda/economy-engine';
 import { config } from './config';
 import { generateUniqueRoomCode } from './codes';
 import { avatarForSeat } from './avatars';
@@ -42,6 +43,7 @@ import { chooseDiscard, chooseTurn } from './thirtyOneBotAI';
 import { buildPublicRoomState, buildSelfState } from './thirtyOneRedact';
 import { ThirtyOneRoom, ThirtyOneRoomPlayer } from './thirtyOneRoom';
 import { MatchHistoryStore } from './persistence';
+import { adjustBalance, WalletStore } from './wallet';
 import { log } from './logger';
 
 /** Bots act after a short, human-like pause (same convention as the others). */
@@ -63,6 +65,7 @@ export class ThirtyOneGameServer {
   constructor(
     private readonly io: Server,
     private readonly history: MatchHistoryStore,
+    private readonly wallet: WalletStore,
   ) {}
 
   register(socket: Socket): void {
@@ -446,7 +449,7 @@ export class ThirtyOneGameServer {
     this.broadcastToRoom(room, ThirtyOneServerEvents.RoundResult, payload);
   }
 
-  private handleGameOver(room: ThirtyOneRoom): void {
+  private async handleGameOver(room: ThirtyOneRoom): Promise<void> {
     const game = room.game;
     if (!game) return;
     const standings = this.buildStandings(room);
@@ -464,6 +467,15 @@ export class ThirtyOneGameServer {
       playerNames: this.namesBySeat(room),
       isBot: this.isBotBySeat(room),
     }));
+
+    await Promise.all(
+      standings.map(async (s) => {
+        if (s.isBot) return;
+        const delta = thirtyOnePayoutDelta(s.rank === 1);
+        s.moneyDelta = delta;
+        s.newBalance = await adjustBalance(this.wallet, s.playerId, delta);
+      }),
+    );
 
     const payload: ThirtyOneGameOverPayload = { standings, rounds };
     this.broadcastToRoom(room, ThirtyOneServerEvents.GameOver, payload);

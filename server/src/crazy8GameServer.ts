@@ -36,6 +36,7 @@ import {
   type Crazy8PlayCardReq,
   type Crazy8RoundResultPayload,
 } from '@cardadda/shared';
+import { crazy8PayoutDelta } from '@cardadda/economy-engine';
 import { config } from './config';
 import { generateUniqueRoomCode } from './codes';
 import { avatarForSeat } from './avatars';
@@ -43,6 +44,7 @@ import { chooseCard, chooseSuit } from './crazy8BotAI';
 import { buildPublicRoomState, buildSelfState } from './crazy8Redact';
 import { Crazy8Room, Crazy8RoomPlayer } from './crazy8Room';
 import { MatchHistoryStore } from './persistence';
+import { adjustBalance, WalletStore } from './wallet';
 import { log } from './logger';
 
 /** Bots act after a short, human-like pause (same convention as Callbreak). */
@@ -64,6 +66,7 @@ export class Crazy8GameServer {
   constructor(
     private readonly io: Server,
     private readonly history: MatchHistoryStore,
+    private readonly wallet: WalletStore,
   ) {}
 
   register(socket: Socket): void {
@@ -436,7 +439,7 @@ export class Crazy8GameServer {
     this.broadcastToRoom(room, Crazy8ServerEvents.RoundResult, payload);
   }
 
-  private handleGameOver(room: Crazy8Room): void {
+  private async handleGameOver(room: Crazy8Room): Promise<void> {
     const game = room.game;
     if (!game) return;
     const standings = this.buildStandings(room);
@@ -448,6 +451,15 @@ export class Crazy8GameServer {
       playerNames: this.namesBySeat(room, game.numPlayers),
       isBot: this.isBotBySeat(room, game.numPlayers),
     }));
+
+    await Promise.all(
+      standings.map(async (s) => {
+        if (s.isBot) return;
+        const delta = crazy8PayoutDelta(s.rank);
+        s.moneyDelta = delta;
+        s.newBalance = await adjustBalance(this.wallet, s.playerId, delta);
+      }),
+    );
 
     const payload: Crazy8GameOverPayload = { standings, rounds };
     this.broadcastToRoom(room, Crazy8ServerEvents.GameOver, payload);

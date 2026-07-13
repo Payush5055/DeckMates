@@ -15,6 +15,7 @@
   "dependencies": {
     "@cardadda/engine": "*",
     "@cardadda/crazy8-engine": "*",
+    "@cardadda/economy-engine": "*",
     "@cardadda/teenpatti-engine": "*",
     "@cardadda/thirtyone-engine": "*"
   },

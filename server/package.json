@@ -8,11 +8,12 @@
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "DEV_AUTH=1 TRICK_HOLD_MS=80 vitest run"
+    "test": "DEV_AUTH=1 TRICK_HOLD_MS=80 TEENPATTI_BOT_DELAY_MS=5 vitest run"
   },
   "dependencies": {
     "@cardadda/engine": "*",
     "@cardadda/crazy8-engine": "*",
+    "@cardadda/economy-engine": "*",
     "@cardadda/teenpatti-engine": "*",
     "@cardadda/thirtyone-engine": "*",
     "@cardadda/shared": "*",

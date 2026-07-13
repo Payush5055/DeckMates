@@ -3,7 +3,7 @@
 import { Button } from '@/components/ui/Button';
 import { Overlay } from '@/components/ui/Overlay';
 import { SuitDivider } from '@/components/ui/SuitDivider';
-import { formatTenths, ordinal } from '@/lib/format';
+import { formatMoneyDelta, formatTenths, ordinal } from '@/lib/format';
 import { POS_COLOR, relativePosition } from '@/lib/seatLayout';
 import type { GameOverPayload, Seat } from '@cardadda/shared';
 
@@ -50,7 +50,14 @@ export function MatchEndPanel({
                   {isYou && <span className="ml-1 text-xs text-muted">(you)</span>}
                   {isWinner && <span className="ml-2 text-sm text-gold">👑 Winner</span>}
                 </span>
-                <span className="tabular text-xl font-semibold text-ink">{formatTenths(s.totalTenths)}</span>
+                <span className="flex flex-col items-end">
+                  <span className="tabular text-xl font-semibold text-ink">{formatTenths(s.totalTenths)}</span>
+                  {s.moneyDelta !== undefined && (
+                    <span className={`tabular text-xs ${s.moneyDelta >= 0 ? 'text-emerald-400' : 'text-wine'}`}>
+                      {formatMoneyDelta(s.moneyDelta)}
+                    </span>
+                  )}
+                </span>
               </li>
             );
           })}

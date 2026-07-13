@@ -6,13 +6,21 @@ import {
   createGame,
   evaluateSeatHand,
   fold,
+  getBetBounds,
   placeBet,
   requestShow,
   requestSideShow,
   respondToSideShow,
   seeCards,
+  type GameState,
   type Seat,
 } from '@cardadda/teenpatti-engine';
+import {
+  SESSION_TOPUP,
+  STARTING_BALANCE,
+  TEENPATTI_BOOT,
+  settleTeenPattiSession,
+} from '@cardadda/economy-engine';
 import {
   TeenPattiClientEvents,
   TeenPattiServerEvents,
@@ -32,12 +40,21 @@ import { config } from './config';
 import { generateUniqueRoomCode } from './codes';
 import { avatarForSeat } from './avatars';
 import { MatchHistoryStore } from './persistence';
+import { WalletStore } from './wallet';
 import { log } from './logger';
 import { chooseAction, chooseSideShowResponse } from './teenPattiBotAI';
 import { TeenPattiRoom, TeenPattiRoomPlayer } from './teenPattiRoom';
 import { buildPublicRoomState, buildSelfState } from './teenPattiRedact';
 
+/**
+ * Bots act after a short, human-like pause — except in tests, which override
+ * this to near-zero: a Teen Patti hand can legitimately take dozens of
+ * betting turns to resolve (unlike the other three games), so a real per-turn
+ * delay would make integration tests impractically slow.
+ */
 function botDelayMs(): number {
+  const override = process.env.TEENPATTI_BOT_DELAY_MS;
+  if (override !== undefined) return Number(override);
   return 800 + Math.floor(Math.random() * 700);
 }
 
@@ -49,12 +66,22 @@ interface SocketData {
 
 type Ack<T> = ((res: T) => void) | undefined;
 
+/**
+ * TeenPattiGameServer — owns the Teen Patti room registry and, unlike the
+ * other three games, a persistent multi-hand SESSION per room: a room is not
+ * one hand but a continuous stay at a table across many hands, with each
+ * real player's chip stack carrying a real (virtual) money session on top of
+ * their persistent wallet balance. See @cardadda/economy-engine for the
+ * settlement math; this file is only responsible for correctly feeding it
+ * (server-authoritative stack/wager bookkeeping) and applying its result.
+ */
 export class TeenPattiGameServer {
   private rooms = new Map<string, TeenPattiRoom>();
 
   constructor(
     private readonly io: Server,
     private readonly history: MatchHistoryStore,
+    private readonly wallet: WalletStore,
   ) {}
 
   register(socket: Socket): void {
@@ -85,7 +112,7 @@ export class TeenPattiGameServer {
     return room ? { exists: true, seatsFilled: room.seatsFilled, phase: room.phase } : { exists: false, seatsFilled: 0, phase: 'none' };
   }
 
-  private onCreateRoom(socket: Socket, req: TeenPattiCreateRoomReq, ack: Ack<TeenPattiCreateRoomRes>): void {
+  private async onCreateRoom(socket: Socket, req: TeenPattiCreateRoomReq, ack: Ack<TeenPattiCreateRoomRes>): Promise<void> {
     const identity = this.identityOf(socket);
     if (!identity) return ack?.({ ok: false, error: 'Not authenticated' });
     const { userId, username } = identity;
@@ -96,6 +123,9 @@ export class TeenPattiGameServer {
     const room = new TeenPattiRoom(code, userId, variant, fillMode);
     this.rooms.set(code, room);
 
+    const startingPermanent = await this.wallet.getBalance(userId);
+    room.wallets.set(userId, { stack: startingPermanent + SESSION_TOPUP, wagered: 0, startingPermanent });
+
     room.players.push({
       playerId: userId,
       name: username,
@@ -105,18 +135,19 @@ export class TeenPattiGameServer {
       isBot: false,
       socketId: socket.id,
       disconnectTimer: null,
+      leaving: false,
     });
     this.bindSocket(socket, code);
 
     ack?.({ ok: true, roomCode: code });
     log.info(`Teen Patti room ${code} created by ${username} (${variant}, ${fillMode})`);
 
-    this.maybeStart(room);
+    await this.maybeStart(room);
     this.broadcastRoom(room);
     this.driveBots(room);
   }
 
-  private onJoinRoom(socket: Socket, req: TeenPattiJoinRoomReq, ack: Ack<TeenPattiJoinRoomRes>): void {
+  private async onJoinRoom(socket: Socket, req: TeenPattiJoinRoomReq, ack: Ack<TeenPattiJoinRoomRes>): Promise<void> {
     const identity = this.identityOf(socket);
     if (!identity) return ack?.({ ok: false, error: 'Not authenticated' });
     const { userId, username } = identity;
@@ -136,7 +167,7 @@ export class TeenPattiGameServer {
       existing.name = username;
       this.bindSocket(socket, roomCode);
       ack?.({ ok: true, seat: existing.seat });
-      this.maybeStart(room);
+      await this.maybeStart(room);
       this.broadcastRoom(room);
       this.driveBots(room);
       return;
@@ -145,6 +176,11 @@ export class TeenPattiGameServer {
     if (room.game) return ack?.({ ok: false, error: 'Game already in progress' });
     const seat = room.nextFreeSeat();
     if (seat === null) return ack?.({ ok: false, error: 'Room is full' });
+
+    // A brand-new seat always starts a brand-new session: a fresh top-up on
+    // top of whatever the player's persistent balance currently is.
+    const startingPermanent = await this.wallet.getBalance(userId);
+    room.wallets.set(userId, { stack: startingPermanent + SESSION_TOPUP, wagered: 0, startingPermanent });
 
     room.players.push({
       playerId: userId,
@@ -155,6 +191,7 @@ export class TeenPattiGameServer {
       isBot: false,
       socketId: socket.id,
       disconnectTimer: null,
+      leaving: false,
     });
     this.bindSocket(socket, roomCode);
     ack?.({ ok: true, seat });
@@ -162,14 +199,14 @@ export class TeenPattiGameServer {
     this.broadcastRoom(room);
   }
 
-  private onStartNow(socket: Socket): void {
+  private async onStartNow(socket: Socket): Promise<void> {
     const ctx = this.contextOf(socket);
     if (!ctx) return;
     const { room, player } = ctx;
     if (player.playerId !== room.hostPlayerId) return this.emitError(socket, 'Only the host can start the table');
     if (!room.canStartNow()) return this.emitError(socket, 'Need at least 2 real players to start');
-    room.compactSeats();
-    room.game = createGame(room.players.length, room.variant, Math.random);
+    const dealt = await this.beginHand(room);
+    if (!dealt) return this.emitError(socket, 'Not enough players or balance to start a hand');
     this.broadcastRoom(room);
     this.driveBots(room);
   }
@@ -180,12 +217,11 @@ export class TeenPattiGameServer {
     const { room, player } = ctx;
     if (!room.game) return this.emitError(socket, 'The game has not started yet');
     try {
-      room.game = seeCards(room.game, player.seat);
+      this.transition(room, seeCards(room.game, player.seat));
     } catch (err) {
       return this.emitRuleError(socket, err);
     }
-    this.broadcastRoom(room);
-    this.driveBots(room);
+    this.settle(room);
   }
 
   private onBet(socket: Socket, req: TeenPattiBetReq): void {
@@ -193,8 +229,11 @@ export class TeenPattiGameServer {
     if (!ctx) return;
     const { room, player } = ctx;
     if (!room.game) return this.emitError(socket, 'The game has not started yet');
+    const amount = Number(req?.amount);
+    const stack = room.wallets.get(player.playerId)?.stack ?? 0;
+    if (amount > stack) return this.emitError(socket, 'You cannot bet more than your stack');
     try {
-      room.game = placeBet(room.game, player.seat, Number(req?.amount));
+      this.transition(room, placeBet(room.game, player.seat, amount));
     } catch (err) {
       return this.emitRuleError(socket, err);
     }
@@ -207,7 +246,7 @@ export class TeenPattiGameServer {
     const { room, player } = ctx;
     if (!room.game) return this.emitError(socket, 'The game has not started yet');
     try {
-      room.game = fold(room.game, player.seat);
+      this.transition(room, fold(room.game, player.seat));
     } catch (err) {
       return this.emitRuleError(socket, err);
     }
@@ -220,7 +259,7 @@ export class TeenPattiGameServer {
     const { room, player } = ctx;
     if (!room.game) return this.emitError(socket, 'The game has not started yet');
     try {
-      room.game = requestShow(room.game, player.seat);
+      this.transition(room, requestShow(room.game, player.seat));
     } catch (err) {
       return this.emitRuleError(socket, err);
     }
@@ -233,12 +272,11 @@ export class TeenPattiGameServer {
     const { room, player } = ctx;
     if (!room.game) return this.emitError(socket, 'The game has not started yet');
     try {
-      room.game = requestSideShow(room.game, player.seat);
+      this.transition(room, requestSideShow(room.game, player.seat));
     } catch (err) {
       return this.emitRuleError(socket, err);
     }
-    this.broadcastRoom(room);
-    this.driveBots(room);
+    this.settle(room);
   }
 
   private onRespondSideShow(socket: Socket, req: TeenPattiSideShowResReq): void {
@@ -247,55 +285,41 @@ export class TeenPattiGameServer {
     const { room, player } = ctx;
     if (!room.game) return this.emitError(socket, 'The game has not started yet');
     try {
-      room.game = respondToSideShow(room.game, player.seat, Boolean(req?.accept));
+      this.transition(room, respondToSideShow(room.game, player.seat, Boolean(req?.accept)));
     } catch (err) {
       return this.emitRuleError(socket, err);
     }
     this.settle(room);
   }
 
-  private onLeaveRoom(socket: Socket): void {
+  private async onLeaveRoom(socket: Socket): Promise<void> {
     const ctx = this.contextOf(socket);
     if (!ctx) return;
-    this.removePlayer(ctx.room, ctx.player);
+    await this.settleAndRemovePlayer(ctx.room, ctx.player);
   }
 
-  private onPlayAgain(socket: Socket, ack: Ack<TeenPattiPlayAgainRes>): void {
+  /**
+   * Repurposed from "spin up a brand-new room" to "deal the next hand in
+   * this same session" — a Teen Patti session is one continuous stay at a
+   * table across many hands, not one room per hand. Any connected real
+   * player may trigger the next deal once the current hand is over.
+   */
+  private async onPlayAgain(socket: Socket, ack: Ack<TeenPattiPlayAgainRes>): Promise<void> {
     const ctx = this.contextOf(socket);
     if (!ctx) return ack?.({ ok: false, error: 'Not in a room' });
     const { room } = ctx;
-
-    const survivors = room.players
-      .filter((p) => !p.isBot && p.connected)
-      .sort((a, b) => a.seat - b.seat);
-    if (room.fillMode === 'teammates' && survivors.length < 2) {
-      return ack?.({ ok: false, error: 'Need at least 2 players to continue' });
+    if (room.game && room.game.phase !== 'gameOver') {
+      return ack?.({ ok: false, error: 'The current hand has not finished yet' });
     }
-    if (survivors.length === 0) return ack?.({ ok: false, error: 'No players to continue' });
 
-    const newCode = generateUniqueRoomCode((c) => this.rooms.has(c));
-    const host = survivors.find((p) => p.playerId === room.hostPlayerId)?.playerId ?? survivors[0]!.playerId;
-    const newRoom = new TeenPattiRoom(newCode, host, room.variant, room.fillMode);
-
-    survivors.forEach((p, i) => {
-      newRoom.players.push({
-        playerId: p.playerId,
-        name: p.name,
-        seat: i as Seat,
-        avatar: avatarForSeat(i),
-        connected: false,
-        isBot: false,
-        socketId: null,
-        disconnectTimer: null,
-      });
-    });
-    this.rooms.set(newCode, newRoom);
-
-    for (const p of survivors) {
-      if (p.socketId) this.io.to(p.socketId).emit(TeenPattiServerEvents.PlayAgainRoom, { roomCode: newCode });
+    const dealt = await this.beginHand(room);
+    if (!dealt) {
+      ack?.({ ok: false, error: 'Not enough players or balance to continue' });
+      return;
     }
-    ack?.({ ok: true, roomCode: newCode });
-    this.destroyRoom(room);
+    ack?.({ ok: true, roomCode: room.code });
+    this.broadcastRoom(room);
+    this.driveBots(room);
   }
 
   private onDisconnect(socket: Socket): void {
@@ -308,17 +332,19 @@ export class TeenPattiGameServer {
 
     player.disconnectTimer = setTimeout(() => {
       player.disconnectTimer = null;
-      if (!player.connected) this.removePlayer(room, player);
+      if (!player.connected) void this.settleAndRemovePlayer(room, player);
     }, config.reconnectGraceMs);
   }
 
-  private maybeStart(room: TeenPattiRoom): void {
+  private async maybeStart(room: TeenPattiRoom): Promise<void> {
     if (!room.readyToAutoStart()) return;
     room.compactSeats();
     let seat = room.nextFreeSeat();
     while (seat !== null && room.players.length < BOT_TABLE_SIZE) {
+      const botId = `bot-${seat}`;
+      room.wallets.set(botId, { stack: STARTING_BALANCE + SESSION_TOPUP, wagered: 0, startingPermanent: 0 });
       room.players.push({
-        playerId: `bot-${seat}`,
+        playerId: botId,
         name: 'Bot',
         seat,
         avatar: avatarForSeat(seat),
@@ -326,13 +352,122 @@ export class TeenPattiGameServer {
         isBot: true,
         socketId: null,
         disconnectTimer: null,
+        leaving: false,
       });
       seat = room.nextFreeSeat();
     }
-    room.game = createGame(BOT_TABLE_SIZE, room.variant, Math.random);
+    await this.beginHand(room);
+  }
+
+  /**
+   * Deal a fresh hand into this room/session: settles out (removes) anyone
+   * who can no longer afford the boot, tops bots back up, then deals. Returns
+   * false (and may destroy the room) if too few players/balance remain.
+   */
+  private async beginHand(room: TeenPattiRoom): Promise<boolean> {
+    this.cleanupLeavers(room);
+    room.compactSeats();
+
+    for (const player of [...room.players]) {
+      const w = room.wallets.get(player.playerId);
+      if (!w) continue;
+      if (player.isBot) {
+        if (w.stack < TEENPATTI_BOOT) w.stack = STARTING_BALANCE + SESSION_TOPUP;
+        continue;
+      }
+      if (w.stack < TEENPATTI_BOOT) {
+        await this.settleAndRemovePlayer(room, player);
+      }
+    }
+
+    if (this.rooms.get(room.code) !== room) return false; // destroyed while settling above
+    room.compactSeats();
+
+    const realCount = room.players.filter((p) => !p.isBot).length;
+    const viable = room.fillMode === 'bots' ? realCount >= 1 : realCount >= 2;
+    if (!viable) {
+      await this.destroyRoom(room);
+      return false;
+    }
+
+    room.game = createGame(room.players.length, room.variant, Math.random, TEENPATTI_BOOT);
+    for (const player of room.players) {
+      const w = room.wallets.get(player.playerId)!;
+      w.stack -= TEENPATTI_BOOT;
+      if (!player.isBot) w.wagered += TEENPATTI_BOOT;
+    }
+    return true;
+  }
+
+  /** Apply an engine transition's money effects, then commit it as the room's new state. */
+  private transition(room: TeenPattiRoom, next: GameState): void {
+    const action = next.lastAction;
+    if (action) {
+      if (action.type === 'bet') this.debit(room, action.seat, action.amount);
+      else if (action.type === 'show') this.debit(room, action.requester, action.cost);
+      else if (action.type === 'sideShowRequested') this.debit(room, action.requester, action.cost);
+    }
+    if (next.phase === 'gameOver' && next.winner !== null) {
+      this.credit(room, next.winner, next.pot);
+    }
+    room.game = next;
+  }
+
+  private debit(room: TeenPattiRoom, seat: Seat, amount: number): void {
+    const player = room.playerBySeat(seat);
+    if (!player) return;
+    const w = room.wallets.get(player.playerId);
+    if (!w) return;
+    w.stack -= amount;
+    if (!player.isBot) w.wagered += amount;
+  }
+
+  private credit(room: TeenPattiRoom, seat: Seat, amount: number): void {
+    const player = room.playerBySeat(seat);
+    if (!player) return;
+    const w = room.wallets.get(player.playerId);
+    if (!w) return;
+    w.stack += amount;
+  }
+
+  /**
+   * Whoever's turn it is gets auto-folded before anyone waits on them if
+   * either: (a) they've already left (an explicit leave or a disconnect
+   * timeout that landed mid-hand, not on their turn, so the engine's
+   * turn-gated `fold` couldn't remove them immediately), or (b) — no
+   * side-pots/all-in in this build (documented simplification, not a bug) —
+   * they can no longer afford the engine's legal minimum bet.
+   */
+  private enforceTurnPreconditions(room: TeenPattiRoom): void {
+    let guard = 0;
+    while (room.game && room.game.phase === 'playing' && room.game.turn !== null && guard++ < 8) {
+      const seat = room.game.turn;
+      const player = room.playerBySeat(seat);
+      if (!player) break;
+      if (player.leaving) {
+        this.transition(room, fold(room.game, seat));
+        continue;
+      }
+      const w = room.wallets.get(player.playerId);
+      if (!w) break;
+      const { min } = getBetBounds(room.game, seat);
+      if (w.stack >= min) break;
+      this.transition(room, fold(room.game, seat));
+    }
+  }
+
+  /** Physically remove any player marked `leaving` once it's safe (no longer an active turn-blocker). */
+  private cleanupLeavers(room: TeenPattiRoom): void {
+    room.players = room.players.filter((p) => {
+      if (!p.leaving) return true;
+      if (!room.game || room.game.phase === 'gameOver') return false;
+      return room.game.active[p.seat] === true;
+    });
   }
 
   private settle(room: TeenPattiRoom): void {
+    this.enforceTurnPreconditions(room);
+    this.cleanupLeavers(room);
     this.broadcastRoom(room);
     if (!room.game) return;
     if (room.game.phase === 'gameOver') {
@@ -351,7 +486,7 @@ export class TeenPattiGameServer {
       if (player?.isBot && !room.botTimers.has(player.seat)) {
         this.scheduleBot(room, player.seat, () => {
           if (!room.game || room.game.phase !== 'sideShow' || room.game.pendingSideShow?.target !== player.seat) return;
-          room.game = respondToSideShow(room.game, player.seat, chooseSideShowResponse(room.game, player.seat));
+          this.transition(room, respondToSideShow(room.game, player.seat, chooseSideShowResponse(room.game, player.seat)));
           this.settle(room);
         });
       }
@@ -367,28 +502,28 @@ export class TeenPattiGameServer {
           const action = chooseAction(room.game, player.seat);
           switch (action.action) {
             case 'see':
-              room.game = seeCards(room.game, player.seat);
-              this.broadcastRoom(room);
-              this.driveBots(room);
+              this.transition(room, seeCards(room.game, player.seat));
+              this.settle(room);
               return;
             case 'fold':
-              room.game = fold(room.game, player.seat);
+              this.transition(room, fold(room.game, player.seat));
               break;
             case 'show':
-              room.game = requestShow(room.game, player.seat);
+              this.transition(room, requestShow(room.game, player.seat));
               break;
             case 'sideShow':
-              room.game = requestSideShow(room.game, player.seat);
-              this.broadcastRoom(room);
-              this.driveBots(room);
+              this.transition(room, requestSideShow(room.game, player.seat));
+              this.settle(room);
               return;
-            case 'bet':
-              room.game = placeBet(room.game, player.seat, action.amount);
+            case 'bet': {
+              const stack = room.wallets.get(player.playerId)?.stack ?? action.amount;
+              this.transition(room, placeBet(room.game, player.seat, Math.min(action.amount, stack)));
               break;
+            }
           }
         } catch (err) {
           log.error(`Teen Patti bot action failed (seat ${player.seat})`, err);
-          room.game = fold(room.game!, player.seat);
+          this.transition(room, fold(room.game!, player.seat));
         }
         this.settle(room);
       });
@@ -443,6 +578,7 @@ export class TeenPattiGameServer {
 
     const payload: TeenPattiGameOverPayload = { standings, result };
     this.broadcastToRoom(room, TeenPattiServerEvents.GameOver, payload);
+    log.info(`Teen Patti room ${room.code} hand over`);
 
     const record: TeenPattiMatchRecord = {
       gameType: 'teenpatti',
@@ -475,36 +611,77 @@ export class TeenPattiGameServer {
     });
   }
 
-  private removePlayer(room: TeenPattiRoom, player: TeenPattiRoomPlayer): void {
+  /**
+   * Leaving mid-hand is exactly like being eliminated: forfeit whatever's
+   * already in the pot. The engine's `fold` is turn-gated, though — it can
+   * only remove them from the hand immediately if it's currently their turn.
+   * Otherwise, mark them `leaving` (settled right away, but the actual seat
+   * removal defers to their turn coming up, via `enforceTurnPreconditions`,
+   * or the hand ending some other way, via `cleanupLeavers`) so we never
+   * corrupt the in-progress hand's seat indexing. The table continues for
+   * whoever's left unless too few real players remain, in which case the
+   * whole room — and everyone still in it — settles and closes.
+   */
+  private async settleAndRemovePlayer(room: TeenPattiRoom, player: TeenPattiRoomPlayer): Promise<void> {
     if (player.disconnectTimer) {
       clearTimeout(player.disconnectTimer);
       player.disconnectTimer = null;
     }
-    room.players = room.players.filter((p) => p !== player);
 
-    if (room.players.length === 0 || room.players.every((p) => p.isBot)) {
-      this.destroyRoom(room);
+    const midHand = room.game !== null && room.game.phase !== 'gameOver' && room.game.active[player.seat];
+    if (midHand && room.game!.phase === 'playing' && room.game!.turn === player.seat) {
+      this.transition(room, fold(room.game!, player.seat));
+    } else if (midHand) {
+      player.leaving = true;
+    }
+
+    await this.settleSession(room, player);
+    if (!player.leaving) {
+      room.players = room.players.filter((p) => p !== player);
+    }
+
+    const remaining = room.players.filter((p) => !p.leaving);
+    const realCount = remaining.filter((p) => !p.isBot).length;
+    const viable = room.fillMode === 'bots' ? realCount >= 1 : realCount >= 2;
+    if (remaining.length === 0 || !viable) {
+      await this.destroyRoom(room);
       return;
     }
 
     if (room.game && room.game.phase !== 'gameOver') {
-      this.broadcastToRoom(room, TeenPattiServerEvents.ErrorMessage, {
-        message: 'A player left the table — the hand has ended.',
-      });
-      this.destroyRoom(room);
-      return;
+      this.settle(room);
+    } else {
+      this.cleanupLeavers(room);
+      this.broadcastRoom(room);
     }
-
-    this.broadcastRoom(room);
   }
 
-  private destroyRoom(room: TeenPattiRoom): void {
+  /** Settle one player's session into their persistent wallet balance (server-authoritative). */
+  private async settleSession(room: TeenPattiRoom, player: TeenPattiRoomPlayer): Promise<void> {
+    const w = room.wallets.get(player.playerId);
+    room.wallets.delete(player.playerId);
+    if (player.isBot || !w) return;
+
+    const settlement = settleTeenPattiSession({
+      startingPermanent: w.startingPermanent,
+      topUp: SESSION_TOPUP,
+      endingAmount: w.stack,
+      wagered: w.wagered,
+    });
+    await this.wallet.setBalance(player.playerId, settlement.newPermanentBalance);
+    if (player.socketId) {
+      this.io.to(player.socketId).emit(TeenPattiServerEvents.SessionSettled, settlement);
+    }
+  }
+
+  private async destroyRoom(room: TeenPattiRoom): Promise<void> {
+    this.rooms.delete(room.code);
     for (const timer of room.botTimers.values()) clearTimeout(timer);
     room.botTimers.clear();
+    await Promise.all(room.players.map((p) => this.settleSession(room, p)));
     for (const p of room.players) {
       if (p.disconnectTimer) clearTimeout(p.disconnectTimer);
     }
-    this.rooms.delete(room.code);
   }
 
   private broadcastRoom(room: TeenPattiRoom): void {
@@ -553,9 +730,15 @@ export class TeenPattiGameServer {
     this.emitError(socket, message);
   }
 
-  private guard(fn: () => void, onError?: () => void): void {
+  private guard(fn: () => void | Promise<void>, onError?: () => void): void {
     try {
-      fn();
+      const result = fn();
+      if (result instanceof Promise) {
+        result.catch((err) => {
+          log.error('Unhandled Teen Patti handler error', err);
+          onError?.();
+        });
+      }
     } catch (err) {
       log.error('Unhandled Teen Patti handler error', err);
       onError?.();

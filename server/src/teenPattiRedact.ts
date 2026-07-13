@@ -6,6 +6,7 @@ import {
   showCost,
   visibleHand,
 } from '@cardadda/teenpatti-engine';
+import { requiredWagerAmount, SESSION_TOPUP } from '@cardadda/economy-engine';
 import type {
   TeenPattiPublicPlayer,
   TeenPattiPublicRoomState,
@@ -51,6 +52,7 @@ export function buildPublicRoomState(room: TeenPattiRoom): TeenPattiPublicRoomSt
       isBot: p.isBot,
       active: room.game ? room.game.active[p.seat] ?? false : true,
       seen: room.game ? room.game.seen[p.seat] ?? false : false,
+      stack: room.wallets.get(p.playerId)?.stack ?? 0,
     }));
 
   return {
@@ -79,6 +81,15 @@ export function buildPublicRoomState(room: TeenPattiRoom): TeenPattiPublicRoomSt
 }
 
 export function buildSelfState(room: TeenPattiRoom, player: TeenPattiRoomPlayer): TeenPattiSelfState {
+  const wallet = room.wallets.get(player.playerId);
+  const bankroll = (wallet?.startingPermanent ?? 0) + SESSION_TOPUP;
+  const session = {
+    startingPermanent: wallet?.startingPermanent ?? 0,
+    bankroll,
+    wagered: wallet?.wagered ?? 0,
+    requiredWager: requiredWagerAmount(bankroll),
+  };
+
   const game = room.game;
   if (!game) {
     return {
@@ -96,6 +107,7 @@ export function buildSelfState(room: TeenPattiRoom, player: TeenPattiRoomPlayer)
       canSideShow: false,
       sideShowTargetSeat: null,
       pendingSideShowResponse: null,
+      session,
     };
   }
 
@@ -110,7 +122,9 @@ export function buildSelfState(room: TeenPattiRoom, player: TeenPattiRoomPlayer)
   if (onTurn) {
     const bounds = getBetBounds(game, player.seat);
     minBet = bounds.min;
-    maxBet = bounds.max;
+    // Clamped to the player's remaining stack — the engine's bounds assume
+    // unlimited money, but a real session stack can run out mid-escalation.
+    maxBet = Math.min(bounds.max, wallet?.stack ?? bounds.max);
   }
 
   return {
@@ -128,5 +142,6 @@ export function buildSelfState(room: TeenPattiRoom, player: TeenPattiRoomPlayer)
     canSideShow: onTurn && getSideShowTarget(game, player.seat) !== null,
     sideShowTargetSeat: onTurn ? getSideShowTarget(game, player.seat) : null,
     pendingSideShowResponse: pendingResponse,
+    session,
   };
 }

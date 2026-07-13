@@ -12,11 +12,44 @@
  */
 
 import Link from 'next/link';
+import { useEffect, useState } from 'react';
 import { useAuth } from '@/lib/authContext';
 
+const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL ?? 'http://localhost:4000';
+
+/** Persistent wallet balance, refetched on sign-in and periodically while mounted. */
+function useBalance(token: string | null): number | null {
+  const [balance, setBalance] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!token) {
+      setBalance(null);
+      return;
+    }
+    let cancelled = false;
+    const fetchBalance = () => {
+      fetch(`${SOCKET_URL}/api/wallet`, { headers: { Authorization: `Bearer ${token}` } })
+        .then((r) => r.json())
+        .then((data: { balance?: number }) => {
+          if (!cancelled && typeof data.balance === 'number') setBalance(data.balance);
+        })
+        .catch(() => {});
+    };
+    fetchBalance();
+    const interval = setInterval(fetchBalance, 15000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [token]);
+
+  return balance;
+}
+
 export function SiteHeader() {
-  const { ready, user, needsUsername } = useAuth();
+  const { ready, user, needsUsername, token } = useAuth();
   const signedIn = ready && user !== null && !needsUsername;
+  const balance = useBalance(signedIn ? token : null);
 
   return (
     <header className="mx-auto flex w-full max-w-5xl items-center justify-between px-4 py-4">
@@ -28,23 +61,33 @@ export function SiteHeader() {
         // Reserve the space so the header doesn't jump once auth resolves.
         <span className="h-10 w-24" aria-hidden />
       ) : signedIn ? (
-        <Link
-          href="/account"
-          className="flex items-center gap-2.5 rounded-xl py-1.5 pl-1.5 pr-4 ring-1 ring-gold/30 transition hover:ring-gold/70"
-        >
-          {/* Gold "you" avatar — same visual language as the table seats. */}
-          <span
-            className="flex h-8 w-8 items-center justify-center rounded-full ring-1 ring-black/30"
-            style={{ backgroundColor: '#C9A24B' }}
-            aria-hidden
+        <div className="flex items-center gap-3">
+          {balance !== null && (
+            <span
+              className="tabular rounded-xl bg-rim/50 px-3 py-1.5 text-sm text-gold ring-1 ring-gold/20"
+              title="Your persistent balance"
+            >
+              ₹{balance.toLocaleString('en-IN')}
+            </span>
+          )}
+          <Link
+            href="/account"
+            className="flex items-center gap-2.5 rounded-xl py-1.5 pl-1.5 pr-4 ring-1 ring-gold/30 transition hover:ring-gold/70"
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="#F3EDE0">
-              <circle cx="12" cy="8" r="4" />
-              <path d="M4 20c0-4.4 3.6-8 8-8s8 3.6 8 8Z" />
-            </svg>
-          </span>
-          <span className="text-sm text-ink">{user!.username}</span>
-        </Link>
+            {/* Gold "you" avatar — same visual language as the table seats. */}
+            <span
+              className="flex h-8 w-8 items-center justify-center rounded-full ring-1 ring-black/30"
+              style={{ backgroundColor: '#C9A24B' }}
+              aria-hidden
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="#F3EDE0">
+                <circle cx="12" cy="8" r="4" />
+                <path d="M4 20c0-4.4 3.6-8 8-8s8 3.6 8 8Z" />
+              </svg>
+            </span>
+            <span className="text-sm text-ink">{user!.username}</span>
+          </Link>
+        </div>
       ) : (
         <Link
           href="/login"

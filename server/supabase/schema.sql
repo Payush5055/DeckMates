@@ -89,3 +89,24 @@ create index if not exists matches_played_at_idx
 --   alter table public.matches enable row level security;
 --   create policy "read own matches" on public.matches for select to authenticated
 --     using (auth.uid()::text = any (player_ids));
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Wallets
+--
+-- One persistent permanent-balance row per user, shared across all four
+-- games (Teen Patti sessions, and one-off payouts from Callbreak/31/Crazy 8s).
+-- `user_id` is a plain text primary key with NO foreign key — like
+-- `matches.player_ids`, real players use their auth.users id, but dev/bot play
+-- uses synthetic ids ('dev-ann', 'bot-1', …) that have no auth.users row, and
+-- Postgres has no partial-FK mechanism for "only some rows must match".
+-- New accounts start at ₹1,00,000 (STARTING_BALANCE in @cardadda/economy-engine).
+-- ─────────────────────────────────────────────────────────────────────────────
+create table if not exists public.wallets (
+  user_id text primary key,
+  balance bigint not null default 100000,
+  updated_at timestamptz not null default now()
+);
+
+-- Written and read exclusively by the server with the service-role key (every
+-- balance calculation must be server-authoritative) — so RLS is not required
+-- for the current flow, matching `matches` above.
