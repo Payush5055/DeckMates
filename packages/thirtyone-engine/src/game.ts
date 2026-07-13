@@ -352,6 +352,65 @@ function settleRound(
   };
 }
 
+/* ── Forced elimination (voluntary leave / unresponsive drop) ─────────────── */
+
+/**
+ * Force a seat to 0 lives immediately, OUTSIDE the normal reveal flow — used
+ * when a player voluntarily leaves mid-match or fails to reconnect after a
+ * drop. Both are treated exactly like a normal elimination: the match simply
+ * continues with whoever's left. This never ends the room by itself; it only
+ * ends the GAME when it leaves at most one player standing (a real, correct
+ * game-over), which is different from tearing down the room.
+ *
+ * A no-op if the seat is already eliminated or the game has already ended.
+ * If it was this seat's turn (or they still owed a pending final turn after a
+ * knock), the turn/knock bookkeeping is unwound exactly as if they had passed
+ * — turn advances (or the knock reveal resolves) so no one is left waiting on
+ * a turn that will never come.
+ */
+export function eliminateSeat(state: GameState, seat: Seat): GameState {
+  if (state.phase === 'gameOver') return state;
+  if ((state.lives[seat] ?? 0) <= 0) return state; // already gone
+
+  const lives = state.lives.slice();
+  lives[seat] = 0;
+  const eliminationRound = state.eliminationRound.slice();
+  if (eliminationRound[seat] === null) eliminationRound[seat] = state.roundNumber;
+  // Their cards are irrelevant from here on — they hold nothing, contest nothing.
+  const hands = state.hands.map((h, s) => (s === seat ? [] : h));
+
+  let next: GameState = { ...state, lives, eliminationRound, hands };
+
+  // Attrition alone can end the game — distinct from a round-scoring gameOver,
+  // but the same terminal phase.
+  if (aliveSeats(lives).length <= 1) {
+    return { ...next, phase: 'gameOver' };
+  }
+  if (next.phase !== 'playing') return next; // mid-'roundEnd' pause: nothing else to unwind
+
+  if (next.turn === seat) {
+    // They were the one on the clock — pass the turn along (or resolve the
+    // knock if this was the last outstanding final turn).
+    if (next.knocker !== null) {
+      const remaining = (next.finalTurnsRemaining ?? 1) - 1;
+      next = remaining <= 0
+        ? resolveKnockReveal(next)
+        : { ...next, finalTurnsRemaining: remaining, turn: nextAliveSeat(lives, seat), stage: 'draw' };
+    } else {
+      next = { ...next, turn: nextAliveSeat(lives, seat), stage: 'draw' };
+    }
+  } else if (next.knocker !== null && next.knocker !== seat) {
+    // Not their turn right now, but they still owed a future final turn in the
+    // post-knock queue — that turn will now never happen (nextAliveSeat skips
+    // eliminated seats going forward), so the remaining-turns COUNT must shrink
+    // too, or the reveal would wait forever on a turn nobody will take.
+    const remaining = (next.finalTurnsRemaining ?? 1) - 1;
+    next = remaining <= 0 ? resolveKnockReveal(next) : { ...next, finalTurnsRemaining: remaining };
+  }
+
+  return next;
+}
+
 /** Deal the next round after a `roundEnd` pause: the starting seat advances
  * clockwise (skipping eliminated players); lives and history carry over. */
 export function startNextRound(state: GameState, rng: RNG = Math.random): GameState {

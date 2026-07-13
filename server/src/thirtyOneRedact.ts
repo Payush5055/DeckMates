@@ -52,7 +52,10 @@ export function buildPublicRoomState(room: ThirtyOneRoom): ThirtyOnePublicRoomSt
 export function buildSelfState(room: ThirtyOneRoom, player: ThirtyOneRoomPlayer): ThirtyOneSelfState {
   const game = room.game;
   const hand = game ? game.hands[player.seat]!.slice() : [];
-  const myTurn = game !== null && game.phase === 'playing' && game.turn === player.seat;
+  // Eliminated seats are pure spectators — belt-and-suspenders on top of the
+  // engine already never landing `turn` on an eliminated seat.
+  const eliminated = game !== null && (game.lives[player.seat] ?? 0) <= 0;
+  const myTurn = game !== null && !eliminated && game.phase === 'playing' && game.turn === player.seat;
   const atDrawStage = myTurn && game!.stage === 'draw';
 
   return {

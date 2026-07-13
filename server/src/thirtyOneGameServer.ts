@@ -14,6 +14,7 @@ import {
   createGame,
   discard,
   draw,
+  eliminateSeat,
   knock,
   startNextRound,
   type Card,
@@ -118,6 +119,7 @@ export class ThirtyOneGameServer {
       isBot: false,
       socketId: socket.id,
       disconnectTimer: null,
+      hasVoluntarilyLeft: false,
     });
     this.bindSocket(socket, code);
 
@@ -138,6 +140,12 @@ export class ThirtyOneGameServer {
 
     const existing = room.playerById(userId);
     if (existing) {
+      // A player who voluntarily left (or was force-eliminated after an
+      // unresponsive drop) mid-match does NOT get spectator status back —
+      // that's reserved for players who lost through ordinary gameplay.
+      if (existing.hasVoluntarilyLeft) {
+        return ack?.({ ok: false, error: 'You left this match and cannot rejoin' });
+      }
       if (existing.disconnectTimer) {
         clearTimeout(existing.disconnectTimer);
         existing.disconnectTimer = null;
@@ -166,6 +174,7 @@ export class ThirtyOneGameServer {
       isBot: false,
       socketId: socket.id,
       disconnectTimer: null,
+      hasVoluntarilyLeft: false,
     });
     this.bindSocket(socket, roomCode);
     ack?.({ ok: true, seat });
@@ -216,10 +225,38 @@ export class ThirtyOneGameServer {
     this.settle(room);
   }
 
+  /**
+   * Leave lifecycle for 31 — deliberately NOT the Callbreak/Crazy8s pattern
+   * (where any mid-match departure aborts the room), since 31 is designed to
+   * survive a shrinking player pool:
+   *   • Pre-game (waiting room): simple removal, same as the other games.
+   *   • Host, mid-match or post-match: the ONE thing that ends the room for
+   *     everyone. The client gates this behind a confirmation dialog; the
+   *     server trusts that an explicit leave_room from the host means it was
+   *     confirmed.
+   *   • Non-host: always free to leave immediately. If they still have lives
+   *     in an ongoing match, that's treated exactly like being eliminated —
+   *     the match continues for whoever's left. They may not rejoin as a
+   *     spectator afterward (see the `hasVoluntarilyLeft` join-time guard).
+   */
   private onLeaveRoom(socket: Socket): void {
     const ctx = this.contextOf(socket);
     if (!ctx) return;
-    this.removePlayer(ctx.room, ctx.player);
+    const { room, player } = ctx;
+
+    if (!room.game) {
+      this.removeFromWaitingRoom(room, player);
+      return;
+    }
+
+    if (player.playerId === room.hostPlayerId) {
+      this.endRoomForEveryone(room, `${player.name} (the host) left — the match has ended.`);
+      return;
+    }
+
+    player.hasVoluntarilyLeft = true;
+    this.disconnectSocketOnly(player);
+    this.eliminateIfAliveAndContinue(room, player);
   }
 
   private onPlayAgain(socket: Socket, ack: Ack<ThirtyOnePlayAgainRes>): void {
@@ -248,6 +285,7 @@ export class ThirtyOneGameServer {
         isBot: false,
         socketId: null,
         disconnectTimer: null,
+        hasVoluntarilyLeft: false,
       });
     });
     this.rooms.set(newCode, newRoom);
@@ -272,10 +310,21 @@ export class ThirtyOneGameServer {
 
     player.disconnectTimer = setTimeout(() => {
       player.disconnectTimer = null;
-      if (!player.connected) {
-        log.info(`Grace expired for ${player.playerId} in 31 ${room.code}; removing`);
-        this.removePlayer(room, player);
+      if (player.connected) return; // reconnected within the grace window
+
+      log.info(`Grace expired for ${player.playerId} in 31 ${room.code}`);
+      if (!room.game) {
+        // Pre-game: unchanged from before — just free the seat.
+        this.removeFromWaitingRoom(room, player);
+        return;
       }
+      // Mid-match or post-match: an unresponsive drop is NEVER allowed to end
+      // the room outright — that's reserved for an explicit, CONFIRMED host
+      // Leave. An unreturned player (host or not) is instead treated exactly
+      // like a voluntary departure: eliminated if still alive, match
+      // continues. (A silent timeout can't have been "confirmed" by anyone,
+      // so it never triggers the host's room-ending path.)
+      this.eliminateIfAliveAndContinue(room, player);
     }, config.reconnectGraceMs);
   }
 
@@ -294,6 +343,7 @@ export class ThirtyOneGameServer {
         isBot: true,
         socketId: null,
         disconnectTimer: null,
+        hasVoluntarilyLeft: false,
       });
       seat = room.nextFreeSeat();
     }
@@ -475,25 +525,70 @@ export class ThirtyOneGameServer {
 
   /* ── Membership / teardown ──────────────────────────────────────────────── */
 
-  private removePlayer(room: ThirtyOneRoom, player: ThirtyOneRoomPlayer): void {
+  /**
+   * Pre-game only: a departing player simply frees their waiting-room seat.
+   * Unchanged from the other two games' behavior — there's no elimination
+   * concept before a match has even started.
+   */
+  private removeFromWaitingRoom(room: ThirtyOneRoom, player: ThirtyOneRoomPlayer): void {
     if (player.disconnectTimer) {
       clearTimeout(player.disconnectTimer);
       player.disconnectTimer = null;
     }
     room.players = room.players.filter((p) => p !== player);
-
-    if (room.players.every((p) => p.isBot)) {
-      this.destroyRoom(room);
-      return;
-    }
-    if (room.game && room.game.phase !== 'gameOver') {
-      this.broadcastToRoom(room, ThirtyOneServerEvents.ErrorMessage, {
-        message: 'A player left the table — the match has ended.',
-      });
+    if (room.players.length === 0 || room.players.every((p) => p.isBot)) {
       this.destroyRoom(room);
       return;
     }
     this.broadcastRoom(room);
+  }
+
+  /**
+   * The ONE thing that ends a 31 match for everyone: an explicit, CONFIRMED
+   * host Leave — mid-match, or even while the host is just spectating after
+   * their own elimination. Never triggered by elimination itself, a non-host
+   * leaving, or a silent disconnect timeout.
+   */
+  private endRoomForEveryone(room: ThirtyOneRoom, message: string): void {
+    this.broadcastToRoom(room, ThirtyOneServerEvents.ErrorMessage, { message });
+    this.destroyRoom(room);
+  }
+
+  /** Detach a player's socket binding without touching game state — used when
+   * THEY are the one actively leaving (as opposed to a passive disconnect). */
+  private disconnectSocketOnly(player: ThirtyOneRoomPlayer): void {
+    if (player.disconnectTimer) {
+      clearTimeout(player.disconnectTimer);
+      player.disconnectTimer = null;
+    }
+    player.connected = false;
+    player.socketId = null;
+  }
+
+  /**
+   * Shared by "non-host voluntary leave" and "unresponsive drop after the
+   * grace window": if the player still has lives in an ongoing match, force-
+   * eliminate their seat — the match simply continues with whoever's left,
+   * exactly as it would after a normal reveal-driven elimination. If they're
+   * already eliminated/spectating, or the match already ended, there's
+   * nothing to change. Cleans up a room nobody real is watching anymore;
+   * otherwise just broadcasts the (possibly updated) state.
+   */
+  private eliminateIfAliveAndContinue(room: ThirtyOneRoom, player: ThirtyOneRoomPlayer): void {
+    const game = room.game;
+    if (game && game.phase !== 'gameOver' && (game.lives[player.seat] ?? 0) > 0) {
+      try {
+        room.game = eliminateSeat(game, player.seat);
+      } catch (err) {
+        log.error('31: eliminateSeat failed', err);
+      }
+    }
+    if (room.players.every((p) => p.isBot || !p.connected)) {
+      // Nobody real is left to watch — safe to quietly clean up.
+      this.destroyRoom(room);
+      return;
+    }
+    this.settle(room);
   }
 
   private destroyRoom(room: ThirtyOneRoom): void {

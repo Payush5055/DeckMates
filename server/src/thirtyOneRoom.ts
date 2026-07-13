@@ -13,6 +13,14 @@ export interface ThirtyOneRoomPlayer {
   socketId: string | null;
   /** Pending removal timer for a dropped player; cleared on reconnect. */
   disconnectTimer: NodeJS.Timeout | null;
+  /**
+   * Set once this player has voluntarily left mid-match (or failed to
+   * reconnect after an unresponsive drop while still alive) — they were
+   * force-eliminated on the way out and may NOT rejoin as a spectator. A
+   * plain elimination through normal gameplay never sets this: a player who
+   * loses via a reveal stays a full, reconnectable spectator.
+   */
+  hasVoluntarilyLeft: boolean;
 }
 
 /**

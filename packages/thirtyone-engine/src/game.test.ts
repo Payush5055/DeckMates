@@ -7,6 +7,7 @@ import {
   createGame,
   discard,
   draw,
+  eliminateSeat,
   knock,
   nextAliveSeat,
   startNextRound,
@@ -322,3 +323,182 @@ describe('round rotation', () => {
     expect(() => startNextRound(makeState(), mulberry32(6))).toThrow(RuleViolation);
   });
 });
+
+describe('eliminateSeat (voluntary leave / unresponsive drop — never ends the room by itself)', () => {
+  it('zeroes lives and records the elimination round; the match continues (roundEnd, not gameOver)', () => {
+    const g = makeState({ lives: [2, 3, 3, 3], turn: 1 as Seat });
+    const after = eliminateSeat(g, 0 as Seat);
+    expect(after.lives).toEqual([0, 3, 3, 3]);
+    expect(after.eliminationRound).toEqual([1, null, null, null]);
+    expect(after.phase).toBe('playing'); // it wasn't seat 0's turn — nothing else changes
+    expect(after.hands[0]).toEqual([]);
+  });
+
+  it('is a no-op on an already-eliminated seat or a finished game', () => {
+    const g = makeState({ lives: [0, 3, 3, 3] });
+    expect(eliminateSeat(g, 0 as Seat)).toBe(g);
+    const over = makeState({ phase: 'gameOver' });
+    expect(eliminateSeat(over, 1 as Seat)).toBe(over);
+  });
+
+  it('passes the turn along when the eliminated seat was the one on the clock', () => {
+    const g = makeState({ turn: 0 as Seat, stage: 'draw' });
+    const after = eliminateSeat(g, 0 as Seat);
+    expect(after.turn).toBe(1); // next alive seat
+    expect(after.stage).toBe('draw');
+  });
+
+  it('resolving to exactly one seat alive ends the game immediately (attrition, not a scored round)', () => {
+    const g = makeState({ lives: [1, 1, 0, 0], turn: 0 as Seat });
+    const after = eliminateSeat(g, 0 as Seat);
+    expect(after.phase).toBe('gameOver');
+    expect(after.lives).toEqual([0, 1, 0, 0]);
+  });
+
+  it('during a knock: eliminating the CURRENT final-turn holder advances to the next, decrementing the count', () => {
+    let g = makeState({ turn: 0 as Seat });
+    g = knock(g, 0 as Seat); // knocker seat0, finalTurnsRemaining=3, turn->1
+    const after = eliminateSeat(g, 1 as Seat); // seat1 was up right now
+    expect(after.turn).toBe(2);
+    expect(after.finalTurnsRemaining).toBe(2);
+  });
+
+  it('during a knock: eliminating a seat NOT currently up but still owed a final turn shrinks the count without touching whose turn it is', () => {
+    let g = makeState({ turn: 0 as Seat });
+    g = knock(g, 0 as Seat); // finalTurnsRemaining=3, turn->1
+    const after = eliminateSeat(g, 2 as Seat); // seat2 hasn't had their final turn yet
+    expect(after.turn).toBe(1); // unchanged — still seat1's turn
+    expect(after.finalTurnsRemaining).toBe(2);
+  });
+
+  it('during a knock: eliminating the KNOCKER themselves does not touch the remaining-turns count', () => {
+    let g = makeState({ turn: 0 as Seat });
+    g = knock(g, 0 as Seat); // finalTurnsRemaining=3, turn->1
+    const after = eliminateSeat(g, 0 as Seat); // the knocker leaves after knocking
+    expect(after.turn).toBe(1); // unaffected
+    expect(after.finalTurnsRemaining).toBe(3); // unaffected
+  });
+
+  it('eliminating the last outstanding final-turn holder resolves the reveal immediately', () => {
+    // seats 0 and 1 complete their final turns NORMALLY (so alive count stays
+    // above the 1-remaining attrition threshold); seat 2 — the LAST
+    // outstanding final-turn holder — is eliminated instead of playing it out.
+    let g = makeState({ lives: [3, 3, 3, 3], turn: 3 as Seat });
+    g = knock(g, 3 as Seat); // finalTurnsRemaining = 3, turn -> 0
+    g = draw(g, 0 as Seat, 'pile', mulberry32(1));
+    g = discard(g, 0 as Seat, g.hands[0]![3]!);
+    g = draw(g, 1 as Seat, 'pile', mulberry32(2));
+    g = discard(g, 1 as Seat, g.hands[1]![3]!);
+    expect(g.finalTurnsRemaining).toBe(1);
+    expect(g.turn).toBe(2);
+
+    const after = eliminateSeat(g, 2 as Seat); // last outstanding turn — reveal fires
+    expect(after.phase).toBe('roundEnd');
+    expect(after.history).toHaveLength(1);
+    expect(after.history[0]!.reason).toBe('knock');
+  });
+});
+
+describe('full 4-player match narrows correctly to a 1-on-1 and a single winner', () => {
+  /** Every non-knocker draws from the pile and discards the drawn card. */
+  function playOutFinalTurns(g: GameState, seed: number): GameState {
+    let s = g;
+    while (s.phase === 'playing') {
+      const seat = s.turn;
+      s = draw(s, seat, 'pile', mulberry32(seed));
+      s = discard(s, seat, s.hands[seat]![3]!);
+    }
+    return s;
+  }
+
+  it('4 players → the host (seat 0) is eliminated first → play continues 3-handed → narrows to a clean 2-player reveal → single winner', () => {
+    // Round 1: seat 0 knocks with a weak hand and is strictly lowest → loses 2
+    // (the double penalty), dropping it straight to 1 life.
+    let g = makeState({
+      lives: [3, 3, 3, 3],
+      hands: [
+        [c('S', 2), c('H', 3), c('D', 4)], // weak, all-diff → 4
+        [c('C', 9), c('H', 10), c('S', 6)], // 10
+        [c('D', 6), c('C', 7), c('H', 8)], // 8
+        [c('S', 9), c('D', 10), c('C', 11)], // 11
+      ],
+      turn: 0 as Seat,
+    });
+    g = knock(g, 0 as Seat);
+    g = playOutFinalTurns(g, 101);
+    expect(g.phase).toBe('roundEnd');
+    expect(g.history[0]!.doublePenalty).toBe(true);
+    expect(g.lives[0]).toBe(1);
+
+    g = startNextRound(g, mulberry32(102));
+    if (g.phase !== 'playing') {
+      // A freak instant-31 on the very next deal is legitimate; either way the
+      // match must still be alive with seat0 down to 1 life (not gone yet).
+      expect(aliveSeatsCount(g)).toBeGreaterThanOrEqual(3);
+    }
+
+    // Round 2: engineer another knock where seat 0 is again strictly lowest,
+    // finishing it off (1 - 2 clamps to 0 — eliminated, room/match continues).
+    if (g.phase === 'playing') {
+      g = {
+        ...g,
+        hands: [
+          [c('H', 2), c('D', 3), c('S', 5)], // 5 — still weakest
+          [c('C', 9), c('H', 10), c('S', 8)], // 10
+          [c('D', 6), c('C', 7), c('H', 9)], // 9
+          [c('S', 9), c('D', 10), c('C', 12)], // 12
+        ],
+        turn: 0 as Seat,
+        knocker: null,
+        finalTurnsRemaining: null,
+      };
+      g = knock(g, 0 as Seat);
+      g = playOutFinalTurns(g, 103);
+    }
+    expect(g.lives[0]).toBe(0);
+    expect(g.eliminationRound[0]).not.toBeNull();
+    expect(aliveSeatsCount(g)).toBe(3); // match continues with exactly 3 — NOT aborted
+
+    // Grind the remaining players down with forced double-penalty knock-
+    // reveals (each halves a fresh 3-life player to 1, then to 0 next time it
+    // targets them) until exactly one winner remains. This necessarily passes
+    // through a genuine 2-player round — the "1-on-1 between the final two"
+    // the bug report asks to verify — which we assert explicitly below.
+    let sawGenuineOneOnOne = false;
+    let guard = 0;
+    while (aliveSeatsCount(g) > 1 && guard < 40) {
+      guard++;
+      if (g.phase === 'roundEnd') {
+        g = startNextRound(g, mulberry32(200 + guard));
+      }
+      if (g.phase !== 'playing') continue; // an instant-31 landed; loop re-checks count next pass
+      const alive = aliveSeatsFrom(g);
+      if (alive.length === 2) sawGenuineOneOnOne = true;
+      const target = alive[0]!; // always make the lowest-indexed survivor the weak one
+      const rest = alive.slice(1);
+      const hands: Card[][] = [[], [], [], []];
+      hands[target] = [c('S', 2), c('H', 2), c('D', 3)]; // weak, all-diff-suit → 3
+      rest.forEach((seat, i) => {
+        hands[seat] = [c('C', 9), c('D', (10 + i) as Card['rank']), c('H', 8)]; // all-diff-suit → 10ish
+      });
+      g = { ...g, hands, turn: target, knocker: null, finalTurnsRemaining: null };
+      g = knock(g, target);
+      g = playOutFinalTurns(g, 300 + guard);
+    }
+
+    expect(guard).toBeLessThan(40); // sanity: the loop actually converged
+    expect(sawGenuineOneOnOne).toBe(true); // the final stretch really was 2 players, not skipped
+    expect(g.phase).toBe('gameOver');
+    expect(aliveSeatsCount(g)).toBe(1);
+    // Exactly one clean winner: everyone else sits at 0 lives.
+    const winners = g.lives.filter((l) => l > 0);
+    expect(winners).toHaveLength(1);
+  });
+});
+
+function aliveSeatsCount(g: GameState): number {
+  return g.lives.filter((l) => l > 0).length;
+}
+function aliveSeatsFrom(g: GameState): Seat[] {
+  return ([0, 1, 2, 3] as Seat[]).filter((s) => g.lives[s]! > 0);
+}

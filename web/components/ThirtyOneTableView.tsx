@@ -9,6 +9,7 @@ import { TableSurface } from '@/components/table/TableSurface';
 import { Avatar } from '@/components/table/Avatar';
 import { MuteToggle } from '@/components/ui/MuteToggle';
 import { Button } from '@/components/ui/Button';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { YourHand } from '@/components/phases/YourHand';
 import { DiscardDrawPiles } from '@/components/crazy8/DiscardDrawPiles';
 import { RevealPanel } from '@/components/thirtyone/RevealPanel';
@@ -40,6 +41,7 @@ export function ThirtyOneTableView({ code }: { code: string }) {
 
   const [copied, setCopied] = useState(false);
   const [showScores, setShowScores] = useState(false);
+  const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
   const attempted = useRef(false);
 
   useEffect(() => {
@@ -77,6 +79,14 @@ export function ThirtyOneTableView({ code }: { code: string }) {
     router.push('/');
   }
 
+  function requestLeave(isHost: boolean, inMatch: boolean) {
+    if (isHost && inMatch) {
+      setShowLeaveConfirm(true);
+      return;
+    }
+    handleLeave();
+  }
+
   if (!authReady || !user || needsUsername) {
     return (
       <CenteredCard>
@@ -94,7 +104,9 @@ export function ThirtyOneTableView({ code }: { code: string }) {
 
   const you = self.seat;
   const inGame = room.phase !== 'waiting';
-  const showBottomBar = room.phase === 'playing';
+  const isHost = room.players.find((p) => p.seat === you)?.isHost ?? false;
+  const eliminated = room.players.find((p) => p.seat === you)?.eliminated ?? false;
+  const showBottomBar = room.phase === 'playing' && !eliminated;
   const myValue = self.hand.length === 3 ? handValue(self.hand) : null;
   // During discard stage all 4 cards are clickable; otherwise the hand is inert.
   const legalIds = self.mustDiscard ? new Set(self.hand.map(cardId)) : new Set<string>();
@@ -116,14 +128,36 @@ export function ThirtyOneTableView({ code }: { code: string }) {
             </button>
           )}
           <MuteToggle />
-          <button onClick={handleLeave} className="rounded-lg px-2 py-1 text-ink/70 ring-1 ring-ink/20 hover:text-wine">
+          <button
+            onClick={() => requestLeave(isHost, inGame)}
+            className="rounded-lg px-2 py-1 text-ink/70 ring-1 ring-ink/20 hover:text-wine"
+          >
             Leave
           </button>
         </div>
       </header>
 
+      {showLeaveConfirm && (
+        <ConfirmDialog
+          message="Leaving will end the game for everyone."
+          confirmLabel="Leave anyway"
+          cancelLabel="Cancel"
+          onConfirm={() => {
+            setShowLeaveConfirm(false);
+            handleLeave();
+          }}
+          onCancel={() => setShowLeaveConfirm(false)}
+        />
+      )}
+
       {inGame && showScores && (
         <LivesPanel players={room.players} youSeat={you} onClose={() => setShowScores(false)} />
+      )}
+
+      {inGame && eliminated && room.phase !== 'gameOver' && (
+        <div className="mb-2 rounded-xl bg-ink/10 px-4 py-2 text-center text-sm text-muted ring-1 ring-ink/20">
+          You're out — spectating the rest of the match
+        </div>
       )}
 
       {error && (

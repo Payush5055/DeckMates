@@ -218,4 +218,50 @@ describe('ThirtyOneGameServer end-to-end', () => {
     expect(res.ok).toBe(true);
     expect(res.seat).toBe(victimSeat);
   });
+
+  it('room lifecycle: a non-host voluntarily leaving mid-match is eliminated, the match continues for the rest, and they cannot rejoin as a spectator', async () => {
+    const { code, all } = await seatFourPlayers();
+    await waitFor(() => all.every((p) => p.hand.length === 3));
+
+    const leaver = all[1]!; // Bob — not the host (Ann created the room)
+    const leaverSeat = leaver.seat;
+    let sawError = false;
+    for (const p of all) p.socket.on(ThirtyOneServerEvents.ErrorMessage, () => (sawError = true));
+
+    leaver.socket.emit(ThirtyOneClientEvents.LeaveRoom);
+
+    // The match must NOT end: the room is never destroyed, no "match ended"
+    // error is broadcast, and the other three keep receiving live state.
+    await waitFor(() => all[0]!.latest!.room.players.find((p) => p.seat === leaverSeat)?.lives === 0);
+    expect(sawError).toBe(false);
+    const stillThere = all[0]!.latest!.room.players.find((p) => p.seat === leaverSeat);
+    expect(stillThere).toBeDefined(); // they remain as a (disconnected) spectator record
+    expect(stillThere!.eliminated).toBe(true);
+    expect(all[0]!.latest!.room.phase).not.toBe('gameOver'); // 3 players still standing
+
+    // They may not rejoin as a spectator.
+    const rejoin = await connect(leaver.username);
+    const res = await emitAck<ThirtyOneJoinRoomRes>(rejoin.socket, ThirtyOneClientEvents.JoinRoom, {
+      roomCode: code,
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/left this match/i);
+  });
+
+  it('room lifecycle: the HOST leaving mid-match ends the room for everyone', async () => {
+    const { all } = await seatFourPlayers();
+    await waitFor(() => all.every((p) => p.hand.length === 3));
+
+    const host = all[0]!; // Ann created the room — she's the host
+    const errors: string[] = [];
+    for (const p of all) p.socket.on(ThirtyOneServerEvents.ErrorMessage, (m: { message: string }) => errors.push(m.message));
+
+    host.socket.emit(ThirtyOneClientEvents.LeaveRoom);
+    await waitFor(() => errors.length > 0);
+    expect(errors[0]).toMatch(/host.*left|match has ended/i);
+
+    // The room is gone: even the survivors can no longer act on it.
+    const summary = server.thirtyOne.roomSummary(host.latest!.room.roomCode);
+    expect(summary.exists).toBe(false);
+  });
 });
