@@ -1,0 +1,25 @@
+{
+  "name": "@cardadda/teenpatti-engine",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pure, framework-independent Teen Patti rule engine (classic, joker, AK47). No React / Socket.io imports.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@cardadda/engine": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.2",
+    "vitest": "^2.1.1"
+  }
+}

@@ -15,12 +15,17 @@ import type {
   Crazy8MatchPlayerRecord,
   MatchPlayerRecord,
   MatchRecord,
+  TeenPattiMatchPlayerRecord,
   ThirtyOneMatchPlayerRecord,
 } from '@cardadda/shared';
 
 const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL ?? 'http://localhost:4000';
 
-type AnyPlayerRecord = MatchPlayerRecord | Crazy8MatchPlayerRecord | ThirtyOneMatchPlayerRecord;
+type AnyPlayerRecord =
+  | MatchPlayerRecord
+  | Crazy8MatchPlayerRecord
+  | ThirtyOneMatchPlayerRecord
+  | TeenPattiMatchPlayerRecord;
 
 /**
  * Each game stores its result differently (Callbreak: decimal `totalTenths`;
@@ -29,6 +34,9 @@ type AnyPlayerRecord = MatchPlayerRecord | Crazy8MatchPlayerRecord | ThirtyOneMa
  */
 function displayScore(m: MatchRecord, p: AnyPlayerRecord): string {
   if (m.gameType === 'crazy8s') return String((p as Crazy8MatchPlayerRecord).total);
+  if (m.gameType === 'teenpatti') {
+    return (p as TeenPattiMatchPlayerRecord).status === 'winner' ? 'Winner' : 'Out';
+  }
   if (m.gameType === '31') {
     const lives = (p as ThirtyOneMatchPlayerRecord).lives;
     return lives > 0 ? '♥'.repeat(lives) : 'Out';
@@ -40,6 +48,7 @@ const GAME_LABELS: Record<MatchRecord['gameType'], string> = {
   callbreak: 'Callbreak',
   crazy8s: 'Crazy 8s',
   '31': '31',
+  teenpatti: 'Teen Patti',
 };
 
 export default function AccountPage() {

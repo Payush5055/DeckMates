@@ -13,6 +13,7 @@
   "dependencies": {
     "@cardadda/engine": "*",
     "@cardadda/crazy8-engine": "*",
+    "@cardadda/teenpatti-engine": "*",
     "@cardadda/thirtyone-engine": "*",
     "@cardadda/shared": "*",
     "@supabase/supabase-js": "^2.45.4",

@@ -18,6 +18,12 @@ import type {
   Seat as T1Seat,
   TurnStage as T1TurnStage,
 } from '@cardadda/thirtyone-engine';
+import type {
+  Card as TPCard,
+  Seat as TPSeat,
+  Rank as TPRank,
+  TeenPattiMode as TPMode,
+} from '@cardadda/teenpatti-engine';
 
 export type { Card, Seat } from '@cardadda/engine';
 // Re-export the display/value helpers the UI needs so clients can import them
@@ -193,7 +199,11 @@ export interface CallbreakMatchRecord {
  * server/supabase/schema.sql), discriminated by `gameType`. Add a new arm here
  * when a new game gains history persistence.
  */
-export type MatchRecord = CallbreakMatchRecord | Crazy8MatchRecord | ThirtyOneMatchRecord;
+export type MatchRecord =
+  | CallbreakMatchRecord
+  | Crazy8MatchRecord
+  | ThirtyOneMatchRecord
+  | TeenPattiMatchRecord;
 
 /* ── Event name constants (single source of truth) ────────────────────────── */
 
@@ -554,3 +564,186 @@ export const ThirtyOneServerEvents = {
 
 // Re-export the 31 card-kernel types the UI needs from one place.
 export type { Card as ThirtyOneCard, Seat as ThirtyOneSeat } from '@cardadda/thirtyone-engine';
+
+/* ═════════════════════════════════════════════════════════════════════════
+ * Teen Patti — single-hand no-limit betting with blind/seen, show, and side
+ * show. Teammate rooms are manual-start real-player tables; bot rooms are
+ * fixed at 4 seats.
+ * ═════════════════════════════════════════════════════════════════════════ */
+
+export interface TeenPattiPublicPlayer {
+  seat: TPSeat;
+  name: string;
+  avatar: string;
+  connected: boolean;
+  isHost: boolean;
+  isBot: boolean;
+  active: boolean;
+  seen: boolean;
+}
+
+export interface TeenPattiPublicRoomState {
+  roomCode: string;
+  phase: 'waiting' | 'playing' | 'sideShow' | 'gameOver';
+  variant: TPMode;
+  players: TeenPattiPublicPlayer[];
+  seatsFilled: number;
+  turn: TPSeat | null;
+  pot: number;
+  currentStake: number;
+  boot: number;
+  jokerRank: TPRank | null;
+  hostPlayerId: string;
+  canStartNow: boolean;
+  pendingSideShow: {
+    requester: TPSeat;
+    target: TPSeat;
+    cost: number;
+  } | null;
+  winnerSeat: TPSeat | null;
+  lastAction: string | null;
+}
+
+export interface TeenPattiSelfState {
+  playerId: string;
+  seat: TPSeat;
+  /**
+   * Hidden while the player is still blind. Once they see, or once the hand is
+   * over, this carries the actual three cards.
+   */
+  hand: TPCard[] | null;
+  seen: boolean;
+  minBet: number | null;
+  maxBet: number | null;
+  canSeeCards: boolean;
+  canFold: boolean;
+  canBet: boolean;
+  canShow: boolean;
+  showCost: number | null;
+  canSideShow: boolean;
+  sideShowTargetSeat: TPSeat | null;
+  pendingSideShowResponse: {
+    requester: TPSeat;
+    cost: number;
+  } | null;
+}
+
+export interface TeenPattiRoomStateUpdate {
+  room: TeenPattiPublicRoomState;
+  self: TeenPattiSelfState | null;
+}
+
+export interface TeenPattiFinalStanding {
+  seat: TPSeat;
+  playerId: string;
+  name: string;
+  isBot: boolean;
+  rank: number;
+  status: 'winner' | 'folded';
+}
+
+export interface TeenPattiHandResultPayload {
+  winnerSeat: TPSeat;
+  pot: number;
+  variant: TPMode;
+  jokerRank: TPRank | null;
+  revealedHands: TPCard[][];
+  handLabels: string[];
+  playerNames: string[];
+  isBot: boolean[];
+  showdown:
+    | {
+        kind: 'show' | 'sideShow';
+        requester: TPSeat;
+        target: TPSeat;
+        winner: TPSeat;
+        loser: TPSeat;
+        tie: boolean;
+      }
+    | null;
+}
+
+export interface TeenPattiGameOverPayload {
+  standings: TeenPattiFinalStanding[];
+  result: TeenPattiHandResultPayload;
+}
+
+export interface TeenPattiCreateRoomReq {
+  mode: 'bots' | 'teammates';
+  variant: TPMode;
+}
+
+export interface TeenPattiCreateRoomRes {
+  ok: boolean;
+  roomCode?: string;
+  error?: string;
+}
+
+export interface TeenPattiJoinRoomReq {
+  roomCode: string;
+}
+
+export interface TeenPattiJoinRoomRes {
+  ok: boolean;
+  seat?: TPSeat;
+  error?: string;
+}
+
+export interface TeenPattiBetReq {
+  amount: number;
+}
+
+export interface TeenPattiSideShowResReq {
+  accept: boolean;
+}
+
+export interface TeenPattiPlayAgainRes {
+  ok: boolean;
+  roomCode?: string;
+  error?: string;
+}
+
+export interface TeenPattiMatchPlayerRecord {
+  playerId: string;
+  name: string;
+  seat: TPSeat;
+  rank: number;
+  status: 'winner' | 'folded';
+}
+
+export interface TeenPattiMatchRecord {
+  id?: string;
+  gameType: 'teenpatti';
+  roomCode: string;
+  playedAt: string;
+  players: TeenPattiMatchPlayerRecord[];
+  rounds: [TeenPattiHandResultPayload];
+}
+
+export const TeenPattiClientEvents = {
+  CreateRoom: 'teenpatti_create_room',
+  JoinRoom: 'teenpatti_join_room',
+  StartNow: 'teenpatti_start_now',
+  SeeCards: 'teenpatti_see_cards',
+  Bet: 'teenpatti_bet',
+  Fold: 'teenpatti_fold',
+  RequestShow: 'teenpatti_request_show',
+  RequestSideShow: 'teenpatti_request_side_show',
+  RespondSideShow: 'teenpatti_respond_side_show',
+  LeaveRoom: 'teenpatti_leave_room',
+  PlayAgain: 'teenpatti_play_again',
+} as const;
+
+export const TeenPattiServerEvents = {
+  RoomStateUpdate: 'teenpatti_room_state_update',
+  GameOver: 'teenpatti_game_over',
+  ErrorMessage: 'teenpatti_error_message',
+  PlayAgainRoom: 'teenpatti_play_again_room',
+} as const;
+
+export type {
+  Card as TeenPattiCard,
+  Seat as TeenPattiSeat,
+  Rank as TeenPattiRank,
+  TeenPattiMode,
+} from '@cardadda/teenpatti-engine';

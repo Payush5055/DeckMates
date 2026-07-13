@@ -45,6 +45,7 @@ function connect(username: string): Promise<Peer> {
   const socket = ioClient(`http://localhost:${port}`, {
     transports: ['websocket'],
     forceNew: true,
+    reconnection: false,
     auth: { token: `dev:${username}` },
   });
   const peer = new Peer(socket, username);
@@ -81,7 +82,8 @@ beforeEach(async () => {
 afterEach(async () => {
   for (const p of peers) p.socket.close();
   peers.length = 0;
-  server.io.close();
+  server.io.disconnectSockets(true);
+  await new Promise<void>((resolve) => server.io.close(() => resolve()));
   await new Promise<void>((resolve) => server.http.close(() => resolve()));
 });
 
@@ -123,7 +125,11 @@ describe('GameServer end-to-end', () => {
   });
 
   it('rejects a socket with no auth token', async () => {
-    const socket = ioClient(`http://localhost:${port}`, { transports: ['websocket'], forceNew: true });
+    const socket = ioClient(`http://localhost:${port}`, {
+      transports: ['websocket'],
+      forceNew: true,
+      reconnection: false,
+    });
     const err = await new Promise<string>((resolve) => {
       socket.on('connect_error', (e) => resolve(e.message));
     });
