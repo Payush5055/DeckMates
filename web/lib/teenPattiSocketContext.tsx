@@ -59,6 +59,9 @@ export function TeenPattiProvider({ children }: { children: React.ReactNode }) {
   const { token } = useAuth();
   const socketRef = useRef<Socket | null>(null);
   const tokenRef = useRef<string | null>(token);
+  // The room this client believes it's seated at — used to transparently
+  // re-join after a socket reconnect (see the 'connect' handler below).
+  const roomCodeRef = useRef<string | null>(null);
 
   useEffect(() => {
     tokenRef.current = token;
@@ -81,9 +84,20 @@ export function TeenPattiProvider({ children }: { children: React.ReactNode }) {
     });
     socketRef.current = socket;
 
-    socket.on('connect', () => setConnected(true));
+    socket.on('connect', () => {
+      setConnected(true);
+      // A reconnect is a brand-new server-side socket with NO room bound to
+      // it — re-claim our seat or every action would be silently dropped.
+      const code = roomCodeRef.current;
+      if (code) {
+        socket.emit(TeenPattiClientEvents.JoinRoom, { roomCode: code }, (res: TeenPattiJoinRoomRes) => {
+          if (!res?.ok) setError(res?.error ?? 'Could not rejoin the table');
+        });
+      }
+    });
     socket.on('disconnect', () => setConnected(false));
     socket.on(TeenPattiServerEvents.RoomStateUpdate, (update: TeenPattiRoomStateUpdate) => {
+      roomCodeRef.current = update.room.roomCode;
       setRoom(update.room);
       setSelf(update.self);
       if (update.room.phase !== 'gameOver') setGameOver(null);
@@ -157,6 +171,7 @@ export function TeenPattiProvider({ children }: { children: React.ReactNode }) {
 
   const leaveRoom = useCallback(() => {
     socketRef.current?.emit(TeenPattiClientEvents.LeaveRoom);
+    roomCodeRef.current = null; // we left on purpose — never auto-rejoin
     setGameOver(null);
     // Deliberately NOT clearing room/self here — the session-settled summary
     // (if any) still needs a seat/room context to render against; the table

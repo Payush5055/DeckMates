@@ -64,6 +64,9 @@ export function TableProvider({ children }: { children: React.ReactNode }) {
   const socketRef = useRef<Socket | null>(null);
   const tokenRef = useRef<string | null>(token);
   const prevTrickLen = useRef(0);
+  // The room this client believes it's seated at — used to transparently
+  // re-join after a socket reconnect (see the 'connect' handler below).
+  const roomCodeRef = useRef<string | null>(null);
 
   // Keep the latest token available to the socket's auth callback (used on every
   // connect/reconnect) without recreating the socket.
@@ -90,7 +93,20 @@ export function TableProvider({ children }: { children: React.ReactNode }) {
     });
     socketRef.current = socket;
 
-    socket.on('connect', () => setConnected(true));
+    socket.on('connect', () => {
+      setConnected(true);
+      // A reconnect is a brand-new server-side socket with NO room bound to
+      // it: without re-joining, every action would be silently dropped and
+      // broadcasts would stop — the table would freeze on its last frame.
+      // Re-claim our seat; the server's reconnect branch rebinds the socket
+      // and re-broadcasts fresh state.
+      const code = roomCodeRef.current;
+      if (code) {
+        socket.emit(ClientEvents.JoinRoom, { roomCode: code }, (res: JoinRoomRes) => {
+          if (!res?.ok) setError(res?.error ?? 'Could not rejoin the table');
+        });
+      }
+    });
     socket.on('disconnect', () => setConnected(false));
 
     socket.on(ServerEvents.RoomStateUpdate, (update: RoomStateUpdate) => {
@@ -99,6 +115,7 @@ export function TableProvider({ children }: { children: React.ReactNode }) {
       if (trickLen > prevTrickLen.current && trickLen > 0) sound.place();
       prevTrickLen.current = trickLen;
 
+      roomCodeRef.current = update.room.roomCode;
       setRoom(update.room);
       setSelf(update.self);
       if (update.room.phase !== 'gameOver') setGameOver(null);
@@ -157,6 +174,7 @@ export function TableProvider({ children }: { children: React.ReactNode }) {
 
   const leaveRoom = useCallback(() => {
     socketRef.current?.emit(ClientEvents.LeaveRoom);
+    roomCodeRef.current = null;
     setRoom(null);
     setSelf(null);
     setGameOver(null);

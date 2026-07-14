@@ -65,6 +65,9 @@ export function ThirtyOneProvider({ children }: { children: React.ReactNode }) {
   const socketRef = useRef<Socket | null>(null);
   const tokenRef = useRef<string | null>(token);
   const prevTopKey = useRef('');
+  // The room this client believes it's seated at — used to transparently
+  // re-join after a socket reconnect (see the 'connect' handler below).
+  const roomCodeRef = useRef<string | null>(null);
 
   useEffect(() => {
     tokenRef.current = token;
@@ -87,7 +90,17 @@ export function ThirtyOneProvider({ children }: { children: React.ReactNode }) {
     });
     socketRef.current = socket;
 
-    socket.on('connect', () => setConnected(true));
+    socket.on('connect', () => {
+      setConnected(true);
+      // A reconnect is a brand-new server-side socket with NO room bound to
+      // it — re-claim our seat or every action would be silently dropped.
+      const code = roomCodeRef.current;
+      if (code) {
+        socket.emit(ThirtyOneClientEvents.JoinRoom, { roomCode: code }, (res: ThirtyOneJoinRoomRes) => {
+          if (!res?.ok) setError(res?.error ?? 'Could not rejoin the table');
+        });
+      }
+    });
     socket.on('disconnect', () => setConnected(false));
 
     socket.on(ThirtyOneServerEvents.RoomStateUpdate, (update: ThirtyOneRoomStateUpdate) => {
@@ -99,6 +112,7 @@ export function ThirtyOneProvider({ children }: { children: React.ReactNode }) {
       }
       prevTopKey.current = key;
 
+      roomCodeRef.current = update.room.roomCode;
       setRoom(update.room);
       setSelf(update.self);
       if (update.room.phase !== 'gameOver') setGameOver(null);
@@ -158,6 +172,7 @@ export function ThirtyOneProvider({ children }: { children: React.ReactNode }) {
 
   const leaveRoom = useCallback(() => {
     socketRef.current?.emit(ThirtyOneClientEvents.LeaveRoom);
+    roomCodeRef.current = null;
     setRoom(null);
     setSelf(null);
     setGameOver(null);

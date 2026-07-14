@@ -132,3 +132,31 @@ describe('resolveTrick (spades trump)', () => {
     expect(resolveTrick(trick)).toBe(3);
   });
 });
+
+describe('spade (trump) led at a player VOID of spades — regression for the reported freeze', () => {
+  // When the lead suit IS the trump suit, "void of the lead suit" and "void of
+  // spades" are the same condition, so rule 4 (free discard) must apply — the
+  // validator must open the ENTIRE hand, never return zero legal cards.
+  it('the whole hand is legal when void of the led trump suit', () => {
+    const hand = [c('H', 4), c('D', 9), c('C', 13), c('H', 12)];
+    expect(legalPlays(hand, board(c('S', 10)))).toEqual(hand);
+  });
+
+  it('still the whole hand with multiple spades already in the trick', () => {
+    const hand = [c('H', 2), c('C', 7), c('D', 11)];
+    expect(legalPlays(hand, board(c('S', 10), c('S', 14)))).toEqual(hand);
+  });
+
+  it('legalPlays is NEVER empty for any non-empty hand against any spade-led trick', () => {
+    const suits: Card['suit'][] = ['H', 'D', 'C'];
+    for (let trickLen = 1; trickLen <= 3; trickLen++) {
+      const trick = board(...Array.from({ length: trickLen }, (_, i) => c('S', (5 + i * 3) as Card['rank'])));
+      for (const s1 of suits) {
+        for (const s2 of suits) {
+          const hand = [c(s1, 3), c(s2, 12)];
+          expect(legalPlays(hand, trick).length, `trickLen=${trickLen} ${s1}/${s2}`).toBeGreaterThan(0);
+        }
+      }
+    }
+  });
+});
