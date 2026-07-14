@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { SuitDivider } from '@/components/ui/SuitDivider';
 import { AmbientPips } from '@/components/ui/AmbientPips';
+import { LeaderboardWidget } from '@/components/LeaderboardWidget';
 
 /** Netflix-style browse: hero + a row of game cards (only Callbreak is live). */
 
@@ -38,12 +39,9 @@ export default function HomePage() {
           <p className="mt-4 text-muted">
             Real-time Callbreak for four. Sign in, share a room code, and take your seat at the felt.
           </p>
-          <Link
-            href="/game/callbreak"
-            className="mt-7 inline-flex rounded-xl bg-gold px-7 py-3 font-medium text-rim transition hover:brightness-110"
-          >
-            Play now
-          </Link>
+          {/* Starting a game moved entirely to the game cards below — the hero
+              now carries the live leaderboard instead of a Play button. */}
+          <LeaderboardWidget />
         </div>
       </section>
 

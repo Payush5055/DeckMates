@@ -65,3 +65,45 @@ body {
   background: rgba(201, 162, 75, 0.4);
   border-radius: 9999px;
 }
+
+/* Leaderboard "live" treatment: a breathing pulse dot next to the title, and
+   a periodic soft tick on the balance figures so the numbers read as a live
+   feed rather than a static snapshot. Rows stagger via animation-delay. */
+@keyframes live-dot-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.55);
+  }
+  60% {
+    box-shadow: 0 0 0 6px rgba(74, 222, 128, 0);
+  }
+}
+.live-dot {
+  animation: live-dot-pulse 1.8s ease-out infinite;
+}
+
+@keyframes balance-tick {
+  0%,
+  88%,
+  100% {
+    opacity: 1;
+    text-shadow: none;
+  }
+  92% {
+    opacity: 0.55;
+  }
+  96% {
+    opacity: 1;
+    text-shadow: 0 0 10px rgba(201, 162, 75, 0.55);
+  }
+}
+.balance-tick {
+  animation: balance-tick 4.2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-dot,
+  .balance-tick {
+    animation: none;
+  }
+}

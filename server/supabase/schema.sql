@@ -108,5 +108,8 @@ create table if not exists public.wallets (
 );
 
 -- Written and read exclusively by the server with the service-role key (every
--- balance calculation must be server-authoritative) — so RLS is not required
--- for the current flow, matching `matches` above.
+-- balance calculation must be server-authoritative). RLS is enabled with NO
+-- policies: the service-role key bypasses RLS entirely, so this locks the
+-- table against any direct anon/authenticated client access without affecting
+-- the server at all.
+alter table public.wallets enable row level security;

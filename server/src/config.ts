@@ -21,7 +21,21 @@ export const config = {
    * handshake tokens (deriving a stable fake user id). MUST be off in prod.
    */
   devAuth: /^(1|true)$/i.test(process.env.DEV_AUTH ?? ''),
+  /**
+   * Usernames (comma-separated, case-insensitive) with admin rights — i.e.
+   * the ability to credit money to any account. Compared against the VERIFIED
+   * username from the auth token, never a client-supplied value.
+   */
+  adminUsernames: (process.env.ADMIN_USERNAMES ?? 'Ayush')
+    .split(',')
+    .map((name) => name.trim().toLowerCase())
+    .filter(Boolean),
 };
+
+/** True when the given (verified) username holds admin rights. */
+export function isAdminUsername(username: string): boolean {
+  return config.adminUsernames.includes(username.trim().toLowerCase());
+}
 
 /** True when Supabase credentials are present; otherwise we use in-memory. */
 export function hasSupabase(): boolean {

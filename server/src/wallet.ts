@@ -15,11 +15,18 @@ import { STARTING_BALANCE } from '@cardadda/economy-engine';
 import { config, hasSupabase } from './config';
 import { log } from './logger';
 
+export interface WalletBalanceRow {
+  userId: string;
+  balance: number;
+}
+
 export interface WalletStore {
   /** Returns the user's permanent balance, creating the account at STARTING_BALANCE if new. */
   getBalance(userId: string): Promise<number>;
   /** Persists a new permanent balance for the user. */
   setBalance(userId: string, balance: number): Promise<void>;
+  /** Every known balance, sorted highest first (leaderboard order). */
+  listBalances(): Promise<WalletBalanceRow[]>;
 }
 
 /** Read-modify-write helper: adjust a balance by a signed delta, returning the new value. */
@@ -41,6 +48,12 @@ class InMemoryWalletStore implements WalletStore {
 
   async setBalance(userId: string, balance: number): Promise<void> {
     this.balances.set(userId, balance);
+  }
+
+  async listBalances(): Promise<WalletBalanceRow[]> {
+    return [...this.balances.entries()]
+      .map(([userId, balance]) => ({ userId, balance }))
+      .sort((a, b) => b.balance - a.balance);
   }
 }
 
@@ -74,6 +87,15 @@ class SupabaseWalletStore implements WalletStore {
       .from('wallets')
       .upsert({ user_id: userId, balance, updated_at: new Date().toISOString() });
     if (error) throw new Error(`Supabase wallet write failed: ${error.message}`);
+  }
+
+  async listBalances(): Promise<WalletBalanceRow[]> {
+    const { data, error } = await this.client
+      .from('wallets')
+      .select('user_id, balance')
+      .order('balance', { ascending: false });
+    if (error) throw new Error(`Supabase wallet list failed: ${error.message}`);
+    return (data ?? []).map((r: any) => ({ userId: String(r.user_id), balance: Number(r.balance) }));
   }
 }
 

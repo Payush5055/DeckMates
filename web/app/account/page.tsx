@@ -11,6 +11,7 @@ import { useAuth } from '@/lib/authContext';
 import { formatTenths, ordinal } from '@/lib/format';
 import { Button } from '@/components/ui/Button';
 import { SuitDivider } from '@/components/ui/SuitDivider';
+import { AdminMoneyPanel } from '@/components/AdminMoneyPanel';
 import type {
   Crazy8MatchPlayerRecord,
   MatchPlayerRecord,
@@ -56,6 +57,7 @@ export default function AccountPage() {
   const router = useRouter();
   const [matches, setMatches] = useState<MatchRecord[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [walletInfo, setWalletInfo] = useState<{ balance: number; isAdmin: boolean } | null>(null);
 
   // The account page requires being signed in.
   useEffect(() => {
@@ -70,6 +72,14 @@ export default function AccountPage() {
       .then((r) => r.json())
       .then((data: { matches?: MatchRecord[] }) => setMatches(data.matches ?? []))
       .catch(() => setError('Could not reach the game server.'));
+    fetch(`${SOCKET_URL}/api/wallet`, { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => r.json())
+      .then((data: { balance?: number; isAdmin?: boolean }) => {
+        if (typeof data.balance === 'number') {
+          setWalletInfo({ balance: data.balance, isAdmin: Boolean(data.isAdmin) });
+        }
+      })
+      .catch(() => {});
   }, [ready, user, needsUsername, token]);
 
   async function handleSignOut() {
@@ -99,12 +109,17 @@ export default function AccountPage() {
           <div>
             <h1 className="font-serif text-2xl text-ink">{user.username}</h1>
             {user.isDev && <p className="text-xs text-muted">dev test account</p>}
+            {walletInfo && (
+              <p className="tabular mt-0.5 text-sm text-gold">₹{walletInfo.balance.toLocaleString('en-IN')}</p>
+            )}
           </div>
         </div>
         <Button variant="ghost" onClick={() => void handleSignOut()}>
           Sign out
         </Button>
       </section>
+
+      {walletInfo?.isAdmin && token && <AdminMoneyPanel token={token} />}
 
       <h2 className="mt-10 font-serif text-2xl text-ink">Match history</h2>
       <SuitDivider className="my-5" />
